@@ -101,6 +101,7 @@ System design documentation for developers extending Loom.
 
 ### Design Records
 - **[Capability Leveling design record](plan-capability-leveling.md)** - Measured results and decisions
+- **[Effort-Leveling plan](plan-effort-leveling.md)** - 📋 Planned: the effort axis (loops, retries, thinking) and its boundary with model selection
 
 [View all architecture docs →](architecture/)
 
