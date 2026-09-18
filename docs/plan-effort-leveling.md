@@ -1,8 +1,11 @@
 # Plan: Effort-Leveling (the second axis)
 
-**Status**: 📋 Planned — design only. **No code exists.** Nothing in this document is
-implemented, and the measurements cited are all from the
-[Capability Leveling design record](plan-capability-leveling.md), not from this work.
+**Status**: 📋 Planned — design only. **No code exists**, and **no model was called for this
+work.** The measurements cited are from the
+[Capability Leveling design record](plan-capability-leveling.md). One replay analysis over
+that record's committed data was run here (`docs/experiments/probe_join_depth.py`); its
+result is reported in [Phase 0](#phase-0--the-zero-cost-replay) with the two reasons it
+proves less than it appears to.
 **Author**: Josh Schoen
 **Date**: 2026-09-18
 **Loom version at writing**: v1.4.0
@@ -14,10 +17,12 @@ pricing. This plan adds a second axis — **effort**, meaning how much work is s
 attempt regardless of which model answers — and, critically, defines the boundary between
 the two axes *before* either is wired to the other.
 
-**Precise claim (do not overclaim):** this document contains no new measurement. It
-re-reads the existing record, names the controls involved, and fixes the boundaries
-between them so that each can be built and measured independently. Its deliverable is a
-set of invariants and a falsifiable first experiment, not a feature.
+**Precise claim (do not overclaim):** this document runs no new experiment. It re-reads the
+existing record, names the controls involved, and fixes the boundaries between them so that
+each can be built and measured independently. Its deliverable is a set of invariants and a
+falsifiable first experiment, not a feature. The one analysis it does perform is a replay over
+already-committed per-trial data, and it is reported as a pre-check that **amends** the
+experiment rather than as a result that clears it.
 
 **What triggered it:** the shipped ladder's headline mechanism — escalation to a stronger
 model — fired once in 20 trials (Phase 2b) and zero times in 30 (Phase 5). Every measured
@@ -29,6 +34,7 @@ be first-class controls rather than a side effect of the model ladder.
 - [Influence is not coupling](#influence-is-not-coupling)
 - [The controls](#the-controls)
 - [The information-gain principle](#the-information-gain-principle)
+- [What the record does not measure](#what-the-record-does-not-measure)
 - [Pairwise interaction matrix](#pairwise-interaction-matrix)
 - [The scope mismatch](#the-scope-mismatch)
 - [Coupling hazards](#coupling-hazards)
@@ -120,6 +126,59 @@ the build order below rather than first.
 It also gives the first principled *hypothesis* for ladder ordering, where previously there
 was none: **order rungs by information gain, not by price.** That is a claim the record
 supports and that the Phase 0 experiment can begin to test.
+
+## What the record does not measure
+
+The Phase 5 figures reproduce exactly from the committed per-trial rows
+(`docs/experiments/probe_join_depth.py`):
+
+| Arm | Correct | Silent wrong | Exec error | Calls | Strong-model calls | Escalations | Judge calls | Seconds |
+|---|---|---|---|---|---|---|---|---|
+| 1 llama3.2, leveling off | 17 | 5 | 8 | 30 | 0 | 0 | 0 | 25.3 |
+| 2 + retry on exec error | 23 | 7 | 0 | 38 | 0 | 8 | 38 | 30.4 |
+| 3 + ladder → r1 | 23 | 7 | 0 | 38 | **0** | 8 | 38 | 29.7 |
+| 4 r1 alone (ceiling) | 30 | 0 | 0 | 30 | 30 | 0 | 0 | 475.2 |
+
+The 16× wall-clock figure is 475.2 / 29.7 from those `seconds` fields. The 38 judge calls per
+leveled arm are the free sqlite execution checks (30 + 8 retries). One detail the prose did not
+carry: escalations on the seven silent-wrong trials were `[0, 0, 0, 0, 0, 1, 1]` — **two of
+them did fire a rung**, and those are the two that were execution errors in arm 1 and became
+confidently wrong after retry. The data confirms retry manufactured them.
+
+Three limits follow, and they bound what this plan may assume.
+
+### Every arm was a local Ollama model
+
+`llama3.2:latest` at rung 0 in arms 1–3, `deepseek-r1:latest` at rung 0 in arm 4. Nothing else
+ran.
+
+### The model axis has never been exercised across tiers
+
+In **both** leveled arms the rung-1 model was `llama3.2:latest` — the same model as rung 0. The
+r1 rung existed in arm 3's ladder and was never reached. And under the shipped tier rules
+`deepseek-r1:latest` classifies as tier **`local`**, not `frontier`: rule 2 (zero pricing) is
+applied before rule 3 (the reasoning flag), deliberately, because a self-hosted reasoning model
+is still free to retry. So even had that rung fired it would have been local → local.
+
+**No measurement in the record covers a local → frontier escalation.** "Escalation did not fire"
+is the weaker of the two statements available; the stronger one is that the model axis has never
+been measured across a tier boundary at all.
+
+### The dollar economics are untested on both sides
+
+There is **no cost field in the per-trial rows**. The recorded currencies are `seconds` and
+`calls`, and Ollama is priced 0/0 in the catalog, so every arm cost $0 — Phase 2b says this
+plainly ("demonstrates no dollar saving and says nothing about one") and Phase 5 inherits it.
+
+The consequence for this plan is specific: **deferred decision 1 (order rungs by information
+gain, or by catalog cost?) has no supporting data on either side.** That does not weaken the
+build order, it sharpens it — ordering by information gain has evidence behind it, and ordering
+by cost has none yet.
+
+One further consequence for the effort axis: neither of these models accepts a thinking budget,
+so **B1** could not have been tested here even if it were wired. That is not a gap in the
+experiment; it is the structural point of this plan, with the models named. `B2` and `C` worked
+on both.
 
 ## Pairwise interaction matrix
 
@@ -348,22 +407,64 @@ So: the thing that predicted failure is knowable **pre-flight**, for free, and t
 predicts are exactly the ones no free post-flight signal can see.
 
 **Method.** For each of the 30 questions in `docs/experiments/sql_questions.jsonl`, compute a
-predictor from the question and schema alone — required join depth, with table/predicate counts
-as secondary features — with no access to the generated SQL or the outcome. Score it against the
-per-trial outcomes recorded in `docs/experiments/sql_arms.jsonl` for **arm 3** (the leveled arm
-whose escalation decisions are being second-guessed), using the label *"should have escalated"* =
-`silent_wrong`.
+predictor from the **question text and the schema only** — estimated join depth, with table and
+predicate counts as secondary features. The predictor may not read `reference_sql`, the generated
+SQL, or the outcome. Score it against the per-trial outcomes recorded in
+`docs/experiments/sql_arms.jsonl` for **arm 3** (the leveled arm whose escalation decisions are
+being second-guessed), using the label *"should have escalated"* = `silent_wrong`.
+
+The no-`reference_sql` rule is load-bearing rather than pedantic: production has no reference
+SQL, so a predictor that reads it measures nothing that could ship. The pre-check below violated
+this rule, which is how the rule got written down.
 
 **Target class, stated precisely.** The predictor's target is the **retry-unfixable** failures.
 Phase 5 attributed the top-N class (0/6) to "one deterministic syntax bug, retry-recoverable",
 and retry did recover it; the 3-table-join class (0/6) was semantic and retry did not. The
 predictor should separate the semantic class, not all failures.
 
-**Rejection criteria — fixed before running.** The pre-flight axis is **rejected** unless the
-predictor recovers at least **5 of the 7** silent-wrong trials while flagging no more than **1 in
-3** of the 23 non-silent-wrong trials. Anything weaker is not a routing signal; it is a coin
-flip with extra steps, and routing on it would spend frontier-model calls on questions the weak
-model already answers correctly.
+**Rejection criteria — fixed before running, and restated per family.** Depth does not vary
+within a template family in this question set (see the pre-check), so a per-trial bar is
+satisfiable by recognizing one family. Phase 0 is therefore scored two ways, and must clear both:
+
+1. **Per family.** The predictor must separate the failing family from the passing families on
+   features it could compute in production, across **at least 3 of the 5** families — i.e. it
+   must not reduce to a single-family detector.
+2. **Per trial.** At least **5 of the 7** silent-wrong trials recovered, with no more than **1 in
+   3** of the 23 non-silent-wrong trials flagged.
+
+Anything weaker is not a routing signal; it is a coin flip with extra steps, and routing on it
+would spend frontier-model calls on questions the weak model already answers correctly.
+
+⚠️ **Alternatively, and better: fix the question set instead of the scoring.** A question set
+that varies join depth *within* a family breaks the collinearity at its source and makes the
+per-trial bar meaningful on its own. That is the preferred route if a new generator run is
+affordable; the two-way scoring above is the fallback when it is not.
+
+### Preliminary pre-check (2026-09-18) — ⚠️ passes the old bar, and does not count
+
+`docs/experiments/probe_join_depth.py`, run against the committed data:
+
+| Derived join depth | n | Correct | Silent wrong |
+|---|---|---|---|
+| 1 | 18 | 17 | 1 |
+| 2 | 6 | 6 | 0 |
+| **3** | **6** | **0** | **6** |
+
+Against the criteria as originally written: **6 of 7** silent wrongs recovered (bar: ≥ 5) and
+**0 false flags out of 23** (bar: ≤ 33.3%). Formally a pass, with room. It does not clear the
+pre-flight axis, for two reasons, and both are why the method and criteria above were amended:
+
+1. **Leakage.** Join depth was derived from `reference_sql` — the gold answer. The result
+   establishes that join depth *separates the failure class*, not that an *estimable* predictor
+   does.
+2. **Collinearity.** Family 3 is the only depth-3 family and is exactly 6 of the 30 questions, so
+   `depth >= 3` and `family == 3` are the same predictor here. The effective sample size for the
+   signal is **5 families, not 30 trials** — it recognizes one template family rather than
+   generalizing.
+
+Also worth recording: the one missed silent wrong sits at depth 1 — a failure with no complexity
+signal at all. Even a perfect complexity router leaves that class untouched, which bounds the
+ceiling of the whole pre-flight axis.
 
 **Confounds to state in the result, whatever it says.** N=30, one seeded draw, one schema, five
 template families, SQLite rather than Teradata dialect. A predictor tuned on the same 30 trials
@@ -381,7 +482,10 @@ Each one is deliberately open, and each is cheap to keep open under the invarian
 1. Whether effort escalation precedes model escalation. Requires the 2×2 — fix model vary
    effort, fix effort vary model. **Note the conflict this creates:** ordering by information
    gain and ordering by catalog cost now disagree, and which wins is the interesting experiment
-   rather than a design choice to make on paper.
+   rather than a design choice to make on paper. ⚠️ **This decision currently has no supporting
+   data on either side** — every measured arm was free and local, so the record contains no
+   cost-ordering evidence at all, and no local → frontier escalation to derive it from. See
+   [What the record does not measure](#what-the-record-does-not-measure).
 2. Whether pre-flight complexity (**X**) sets effort, model, or both.
 3. Whether loop depth belongs at stage scope at all, or leveling should request it agent-side.
 4. Whether in-model thinking (**B1**) is worth the plumbing, *given* that tool loops are the
@@ -413,7 +517,11 @@ guess about difficulty". The discipline that killed C2 cheaply is the discipline
 
 ## Verification record
 
-Design-only; no tests were run and none are claimed. What was verified in the v1.4.0 tree at
+No Go tests were run and none are claimed; no model was called. One replay analysis was
+executed — `python3 docs/experiments/probe_join_depth.py`, which reads only committed data and
+prints every figure quoted in this document's
+[What the record does not measure](#what-the-record-does-not-measure) and
+[Phase 0](#phase-0--the-zero-cost-replay) sections. What was verified in the v1.4.0 tree at
 `4fa5742`, by reading the code:
 
 - ✅ `PipelineStage` carries eight fields, none of them loop depth, thinking, or learning
@@ -444,12 +552,26 @@ Design-only; no tests were run and none are claimed. What was verified in the v1
   doc comment.
 - ✅ The Phase 0 inputs exist: `docs/experiments/sql_arms.jsonl` and
   `docs/experiments/sql_questions.jsonl`.
+- ✅ **Executed.** Phase 5's per-arm figures reproduce exactly from the raw rows: 17/5/8,
+  23/7/0, 23/7/0 and 30/0/0 correct / silent-wrong / exec-error; 30/38/38/30 calls; 0/0/0/30
+  strong-model calls; 25.3/30.4/29.7/475.2 seconds. Escalations on the seven silent-wrong
+  trials were `[0, 0, 0, 0, 0, 1, 1]`.
+- ✅ **Executed.** Every attempt in all four arms ran one of two local Ollama models
+  (`llama3.2:latest`, `deepseek-r1:latest`), and rung 1 in both leveled arms was
+  `llama3.2:latest` — so no escalation crossed a tier boundary. No cost field exists in the
+  rows.
+- ⚠️ **Executed, and it amended this plan.** The Phase 0 predictor pre-check passes the
+  originally-written bar (6 of 7 recovered, 0 of 23 false flags) but is leaky — derived from
+  `reference_sql` — and collinear with template family, so its effective N is 5. The Phase 0
+  method and rejection criteria were rewritten in response.
 - ⚠️ No `leveling:` block appears in any shipped example workflow;
   `examples/reference/workflows/workflow-all-fields-reference.yaml` does not mention it. Worth
   fixing independently of this plan.
-- 📋 Every measurement cited in this document comes from
-  [plan-capability-leveling.md](plan-capability-leveling.md) (Phases 2b–5). No new measurement
-  was performed.
+- 📋 Every *measurement* cited in this document comes from
+  [plan-capability-leveling.md](plan-capability-leveling.md) (Phases 2b–5). No new experiment
+  was run and no model was called; the three ✅/⚠️ **Executed** entries above are replay
+  analysis over that record's committed data, reproducible with
+  `python3 docs/experiments/probe_join_depth.py`.
 
 ## See Also
 
