@@ -17,12 +17,13 @@ pricing. This plan adds a second axis — **effort**, meaning how much work is s
 attempt regardless of which model answers — and, critically, defines the boundary between
 the two axes *before* either is wired to the other.
 
-**Precise claim (do not overclaim):** this document runs no new experiment. It re-reads the
-existing record, names the controls involved, and fixes the boundaries between them so that
-each can be built and measured independently. Its deliverable is a set of invariants and a
-falsifiable first experiment, not a feature. The one analysis it does perform is a replay over
-already-committed per-trial data, and it is reported as a pre-check that **amends** the
-experiment rather than as a result that clears it.
+> [!IMPORTANT]
+> **Precise claim — do not overclaim.** This document runs no new experiment. It re-reads the
+> existing record, names the controls involved, and fixes the boundaries between them so that
+> each can be built and measured independently. Its deliverable is a set of invariants and a
+> falsifiable first experiment, not a feature. The one analysis it does perform is a replay over
+> already-committed per-trial data, and it is reported as a pre-check that **amends** the
+> experiment rather than as a result that clears it.
 
 **What triggered it:** the shipped ladder's headline mechanism — escalation to a stronger
 model — fired once in 20 trials (Phase 2b) and zero times in 30 (Phase 5). Every measured
@@ -46,6 +47,7 @@ be first-class controls rather than a side effect of the model ladder.
 - [Deferred decisions](#deferred-decisions)
 - [Risks](#risks)
 - [Verification record](#verification-record)
+- [Rendering this record as a page](#rendering-this-record-as-a-page)
 - [See Also](#see-also)
 
 ## Influence is not coupling
@@ -160,9 +162,10 @@ r1 rung existed in arm 3's ladder and was never reached. And under the shipped t
 applied before rule 3 (the reasoning flag), deliberately, because a self-hosted reasoning model
 is still free to retry. So even had that rung fired it would have been local → local.
 
-**No measurement in the record covers a local → frontier escalation.** "Escalation did not fire"
-is the weaker of the two statements available; the stronger one is that the model axis has never
-been measured across a tier boundary at all.
+> [!WARNING]
+> **The stronger statement.** "Escalation did not fire" is the weaker of the two available.
+> **No measurement in the record covers a local → frontier escalation** — the model axis has
+> never been measured across a tier boundary at all.
 
 ### The dollar economics are untested on both sides
 
@@ -279,10 +282,11 @@ Three things are true today that block the work, independent of any design choic
 
 ### You cannot bound what you cannot meter
 
-`docs/reference/workflow-leveling.md` states that per-attempt cost is read from the result
-the attempt returned, which carries the **final LLM response's** usage, and that "an attempt
-that ran a tool loop inside the agent reports less than it spent, so the gate can let a call
-through that precise accounting would have blocked."
+> [!WARNING]
+> `docs/reference/workflow-leveling.md` states that per-attempt cost is read from the result
+> the attempt returned, which carries the **final LLM response's** usage, and that "an attempt
+> that ran a tool loop inside the agent reports less than it spent, so the gate can let a call
+> through that precise accounting would have blocked."
 
 So the currency most worth spending (**B2**, loop depth) is precisely the one `max_cost_usd`
 can least see. Leaning on it makes an already-understated gate worse, silently. **Per-currency
@@ -422,9 +426,11 @@ Phase 5 attributed the top-N class (0/6) to "one deterministic syntax bug, retry
 and retry did recover it; the 3-table-join class (0/6) was semantic and retry did not. The
 predictor should separate the semantic class, not all failures.
 
-**Rejection criteria — fixed before running, and restated per family.** Depth does not vary
-within a template family in this question set (see the pre-check), so a per-trial bar is
-satisfiable by recognizing one family. Phase 0 is therefore scored two ways, and must clear both:
+> [!WARNING]
+> **Rejection criteria — fixed before running, and restated per family.** Depth does not vary
+> within a template family in this question set (see the pre-check), so a per-trial bar is
+> satisfiable by recognizing one family. Phase 0 is therefore scored two ways, and must clear
+> **both** of the bars below.
 
 1. **Per family.** The predictor must separate the failing family from the passing families on
    features it could compute in production, across **at least 3 of the 5** families — i.e. it
@@ -572,6 +578,29 @@ prints every figure quoted in this document's
   was run and no model was called; the three ✅/⚠️ **Executed** entries above are replay
   analysis over that record's committed data, reproducible with
   `python3 docs/experiments/probe_join_depth.py`.
+
+## Rendering this record as a page
+
+This Markdown is the source of record. A styled standalone HTML version is generated from it —
+never hand-edited — by `scripts/render-plan-page.py`:
+
+```bash
+python3 scripts/render-plan-page.py docs/plan-effort-leveling.md \
+  -o /tmp/effort-leveling-plan.html --title "Effort Leveling Plan"
+```
+
+The renderer is stdlib-only (the repo has no pandoc and no Markdown package) and supports the
+subset these plan records use: headings, pipe tables, lists with hanging continuations,
+blockquotes, GitHub alerts (`> [!WARNING]`), rules, and inline code/bold/italic/links. Four
+source conventions get a visual treatment: the `**Key**: value` run under the H1 becomes the
+masthead, a `## Table of Contents` list becomes the sticky side nav, ✅/⚠️/📋/❌/🚧 become status
+pills, and a table cell holding a bare control key (`A`, `B1`, `A × B1`) is set in the accent
+mono face. Relative links to repo files are de-linked to text plus path, because they would
+404 once the page is published away from the repo. Anything outside the subset renders as
+visible escaped text rather than being dropped.
+
+`--title` exists so a published page keeps a stable name when the H1 is reworded. The generated
+HTML is build output and is not committed.
 
 ## See Also
 
