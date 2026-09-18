@@ -1,0 +1,710 @@
+<title>Capability Leveling</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,400&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<style>
+  :root {
+    --ground:#EBEEF1; --surface:#FFFFFF; --sunk:#E2E7EC; --ink:#141E28;
+    --muted:#59697A; --rule:#CFD7DF; --accent:#8F5406; --accent-soft:#F0E4D2;
+    --pay:#14603C; --pay-soft:#DCEBE2; --fail:#8B2E29; --fail-soft:#F2E0DE;
+    --display:"Archivo","Helvetica Neue",Arial,sans-serif;
+    --body:"Source Serif 4",Georgia,"Times New Roman",serif;
+    --mono:"IBM Plex Mono",ui-monospace,"SF Mono",Menlo,monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground:#0E151D; --surface:#161F29; --sunk:#1B2632; --ink:#E3E9EF;
+      --muted:#94A4B3; --rule:#2B3845; --accent:#E4A857; --accent-soft:#2E2517;
+      --pay:#55C08C; --pay-soft:#162A22; --fail:#E4817A; --fail-soft:#2C1B1A;
+    }
+  }
+  :root[data-theme="dark"] {
+    --ground:#0E151D; --surface:#161F29; --sunk:#1B2632; --ink:#E3E9EF;
+    --muted:#94A4B3; --rule:#2B3845; --accent:#E4A857; --accent-soft:#2E2517;
+    --pay:#55C08C; --pay-soft:#162A22; --fail:#E4817A; --fail-soft:#2C1B1A;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    background: var(--ground); color: var(--ink);
+    font-family: var(--body); font-size: 1.0625rem; line-height: 1.62;
+    -webkit-text-size-adjust: 100%;
+  }
+  .wrap { max-width: 56rem; margin: 0 auto; padding: 0 1rem; }
+
+  .hero { background: var(--surface); border-bottom: 1px solid var(--rule); }
+  .hero-in { max-width: 56rem; margin: 0 auto; padding: 3.25rem 1rem 2.5rem; }
+  .kicker { font-family: var(--mono); font-size: .6875rem; font-weight: 500;
+    letter-spacing: .15em; text-transform: uppercase; color: var(--muted); margin: 0 0 1.1rem; }
+  .kicker b { color: var(--pay); font-weight: 600; }
+  h1 { font-family: var(--display); font-weight: 700;
+    font-size: clamp(2.1rem, 7vw, 3.4rem); line-height: 1.02;
+    letter-spacing: -.024em; text-wrap: balance; margin: 0 0 1rem; }
+  .standfirst { font-size: clamp(1.1rem, 2.6vw, 1.32rem); line-height: 1.48;
+    color: var(--muted); max-width: 42ch; margin: 0; text-wrap: pretty; }
+  .standfirst strong { color: var(--ink); font-weight: 600; }
+
+  main { padding-block: 3rem 1rem; }
+  section { margin-bottom: 3.5rem; }
+  h2 { font-family: var(--display); font-weight: 600;
+    font-size: clamp(1.35rem, 3.4vw, 1.75rem); letter-spacing: -.014em;
+    line-height: 1.16; text-wrap: balance; margin: 0 0 1.1rem;
+    padding-top: 1.1rem; border-top: 2px solid var(--ink); }
+  h3 { font-family: var(--display); font-weight: 600; font-size: 1.0625rem;
+    letter-spacing: -.004em; margin: 2.1rem 0 .55rem; }
+  p { margin: 0 0 1.05rem; text-wrap: pretty; }
+  .lede { font-size: 1.15rem; line-height: 1.55; }
+  strong { font-weight: 600; }
+  code { font-family: var(--mono); font-size: .8em; background: var(--sunk);
+    border: 1px solid var(--rule); border-radius: 2px; padding: .08em .32em; white-space: nowrap; }
+  ul { margin: 0 0 1.05rem; padding-left: 1.3rem; }
+  li { margin-bottom: .5rem; }
+  li::marker { color: var(--muted); }
+
+  .status { font-family: var(--mono); font-size: .625rem; font-weight: 600;
+    letter-spacing: .1em; text-transform: uppercase; padding: .22em .5em;
+    border: 1px solid currentColor; border-radius: 2px; white-space: nowrap; }
+  .status.built { color: var(--pay); } .status.plan { color: var(--accent); }
+  .status.dead { color: var(--fail); }
+  h2 .status { vertical-align: .22em; margin-left: .5rem; }
+
+  figure { margin: 1.9rem 0; }
+  figure svg { display: block; width: 100%; max-width: 100%; height: auto; color: var(--ink); }
+  .figbox { background: var(--surface); border: 1px solid var(--rule);
+    padding: 1.4rem 1.1rem 1rem; overflow-x: auto; }
+  figcaption { font-size: .875rem; line-height: 1.45; color: var(--muted);
+    margin-top: .9rem; max-width: 64ch; }
+  figcaption b { color: var(--ink); font-weight: 600; }
+  svg text { font-family: "IBM Plex Mono", ui-monospace, monospace; }
+  .sv-box { fill: none; stroke: currentColor; stroke-width: 1.2; }
+  .sv-key { fill: none; stroke: currentColor; stroke-width: 2.2; }
+  .sv-paid { fill: none; stroke: var(--accent); stroke-width: 1.6; }
+  .sv-dead { fill: none; stroke: var(--fail); stroke-width: 1.6; }
+  .sv-line { fill: none; stroke: currentColor; stroke-width: 1.2; }
+  .sv-thin { fill: none; stroke: currentColor; stroke-width: .8; opacity: .45; }
+  .sv-t { fill: currentColor; font-size: 13px; }
+  .sv-tb { fill: currentColor; font-size: 13px; font-weight: 600; }
+  .sv-s { fill: var(--muted); font-size: 11px; }
+  .sv-a { fill: var(--accent); font-size: 11px; font-weight: 600; }
+  .sv-f { fill: var(--fail); font-size: 11px; font-weight: 600; }
+  .sv-n { fill: var(--pay); font-size: 11px; font-weight: 600; }
+
+  .scroll { overflow-x: auto; border: 1px solid var(--rule); background: var(--surface); margin: 1.5rem 0; }
+  table { border-collapse: collapse; width: 100%; font-family: var(--display);
+    font-size: .8125rem; font-variant-numeric: tabular-nums; }
+  caption { caption-side: top; text-align: left; font-family: var(--mono);
+    font-size: .625rem; font-weight: 600; letter-spacing: .12em; text-transform: uppercase;
+    color: var(--muted); padding: .8rem 1rem; border-bottom: 1px solid var(--rule); }
+  th, td { text-align: left; padding: .62rem 1rem; border-bottom: 1px solid var(--rule); vertical-align: top; }
+  thead th { font-weight: 600; font-size: .6875rem; letter-spacing: .06em;
+    text-transform: uppercase; color: var(--muted); white-space: nowrap; }
+  tbody tr:last-child td { border-bottom: 0; }
+  td.num { font-family: var(--mono); white-space: nowrap; }
+  .tier { font-family: var(--mono); font-weight: 600; color: var(--accent); white-space: nowrap; }
+  .best { color: var(--pay); font-weight: 600; }
+  .worst { color: var(--fail); font-weight: 600; }
+
+  .figures { display: grid; gap: 1px; background: var(--rule);
+    border: 1px solid var(--rule); margin: 1.75rem 0; }
+  @media (min-width: 40rem) { .figures { grid-template-columns: repeat(3, 1fr); } }
+  .fig2 { background: var(--surface); padding: 1.25rem 1.15rem; }
+  .fig2 .n { font-family: var(--display); font-weight: 700;
+    font-size: clamp(1.5rem, 4.5vw, 1.95rem); letter-spacing: -.02em;
+    font-variant-numeric: tabular-nums; line-height: 1; display: block; margin-bottom: .45rem; }
+  .fig2 .n.up { color: var(--pay); } .fig2 .n.flat { color: var(--muted); }
+  .fig2 .l { font-size: .9375rem; line-height: 1.4; color: var(--muted); }
+  .fig2 .l b { color: var(--ink); font-weight: 600; }
+
+  .ledger { display: grid; gap: 1px; background: var(--rule);
+    border: 1px solid var(--rule); margin: 1.5rem 0; }
+  @media (min-width: 44rem) { .ledger { grid-template-columns: 1fr 1fr; } }
+  .ledger > div { background: var(--surface); padding: 1.35rem 1.3rem; }
+  .ledger h4 { font-family: var(--mono); font-size: .6875rem; font-weight: 600;
+    letter-spacing: .12em; text-transform: uppercase; margin: 0 0 .9rem; }
+  .ledger .does h4 { color: var(--pay); } .ledger .doesnt h4 { color: var(--fail); }
+  .ledger ul { margin: 0; padding: 0; list-style: none; }
+  .ledger li { padding: .55rem 0; border-bottom: 1px solid var(--rule); font-size: .9688rem; margin: 0; }
+  .ledger li:last-child { border-bottom: 0; }
+  .ledger .ev { display: block; font-family: var(--mono); font-size: .6875rem;
+    color: var(--muted); margin-top: .25rem; }
+
+  .note { border-left: 3px solid var(--accent); background: var(--surface);
+    padding: 1.2rem 1.3rem; margin: 1.6rem 0; }
+  .note.hard { border-left-color: var(--fail); }
+  .note.good { border-left-color: var(--pay); }
+  .note > :last-child { margin-bottom: 0; }
+  .note .lbl { font-family: var(--mono); font-size: .625rem; font-weight: 600;
+    letter-spacing: .13em; text-transform: uppercase; color: var(--accent); margin: 0 0 .55rem; }
+  .note.hard .lbl { color: var(--fail); } .note.good .lbl { color: var(--pay); }
+
+  blockquote { margin: 1.9rem 0; padding: 0 0 0 1.3rem; border-left: 2px solid var(--accent);
+    font-family: var(--display); font-weight: 500;
+    font-size: clamp(1.15rem, 2.9vw, 1.45rem); line-height: 1.3;
+    letter-spacing: -.01em; text-wrap: balance; }
+  pre { font-family: var(--mono); font-size: .75rem; line-height: 1.6;
+    background: var(--surface); border: 1px solid var(--rule);
+    padding: 1rem 1.1rem; overflow-x: auto; margin: 1.4rem 0; }
+  pre b { color: var(--accent); font-weight: 600; }
+  pre i { color: var(--muted); font-style: normal; }
+  pre em { color: var(--fail); font-style: normal; font-weight: 600; }
+
+  footer { border-top: 1px solid var(--rule); background: var(--surface); margin-top: 3rem; }
+  .footer-in { max-width: 56rem; margin: 0 auto; padding: 2rem 1rem 2.5rem;
+    font-family: var(--mono); font-size: .75rem; color: var(--muted); }
+  .footer-in p { max-width: 68ch; margin: 0 0 .6rem; }
+  a { color: var(--accent); text-underline-offset: .18em; }
+  a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+</style>
+
+<div class="hero">
+  <div class="hero-in">
+    <p class="kicker">Loom v1.4.0 &nbsp;·&nbsp; <b>Model axis shipped</b> &nbsp;·&nbsp; effort axis designed</p>
+    <h1>Capability Leveling</h1>
+    <p class="standfirst">Run the cheap model first. Check its answer with something free. Escalate only when the check says you must — and <strong>the check is where all the interesting behaviour lives</strong>, because on our own workload the escalation never fired and the cheap retry did everything.</p>
+  </div>
+</div>
+
+<div class="wrap">
+  <main>
+
+    <section>
+      <h2>The shape of it <span class="status built">shipped</span></h2>
+      <p>This page is the reader-facing altitude. The design record behind it — control
+      boundaries, invariants, falsification criteria and the evidence trail — is
+      <strong>docs/plan-effort-leveling.md</strong>, and the configuration surface of the
+      shipped part is <strong>docs/reference/workflow-leveling.md</strong>. Nothing on this
+      page exists only here.</p>
+
+      <p class="lede">A workflow stage normally runs on one model and you take what you get. With leveling enabled, the stage runs on a weak or local model, its output is checked against a contract, and progressively more expensive repairs are attempted only as cheaper ones fail.</p>
+      <p>The order of those repairs is the whole design. Everything that <em>decides</em> is free; only the repairs cost anything.</p>
+
+      <figure>
+        <div class="figbox">
+          <svg viewBox="0 0 800 596" role="img" aria-label="Flow diagram of one leveled stage: a free tier lookup, then the primary model runs and its output is checked. On failure the stage tries free JSON extraction, then a same-model retry carrying the failure text, then escalation to a different model, and finally continues with the best output plus a warning.">
+            <defs>
+              <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                <path d="M0,0 L10,5 L0,10 z" fill="currentColor"/>
+              </marker>
+              <marker id="ahp" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                <path d="M0,0 L10,5 L0,10 z" fill="var(--accent)"/>
+              </marker>
+            </defs>
+            <rect class="sv-box" x="270" y="14" width="200" height="40" rx="2"/>
+            <text class="sv-t" x="370" y="39" text-anchor="middle">Stage prompt</text>
+            <line class="sv-line" x1="370" y1="54" x2="370" y2="80" marker-end="url(#ah)"/>
+            <rect class="sv-box" x="240" y="80" width="260" height="46" rx="2"/>
+            <text class="sv-t" x="370" y="101" text-anchor="middle">Tier lookup from the catalog</text>
+            <text class="sv-n" x="370" y="117" text-anchor="middle">free · ~16 ns · 0 allocations</text>
+            <text class="sv-s" x="512" y="98">frontier or unknown tier:</text>
+            <text class="sv-s" x="512" y="113">no ladder, no judge</text>
+            <line class="sv-line" x1="370" y1="126" x2="370" y2="152" marker-end="url(#ah)"/>
+            <rect class="sv-box" x="285" y="152" width="170" height="40" rx="2"/>
+            <text class="sv-t" x="370" y="177" text-anchor="middle">Primary model</text>
+            <line class="sv-line" x1="370" y1="192" x2="370" y2="218" marker-end="url(#ah)"/>
+            <rect class="sv-key" x="215" y="218" width="310" height="52" rx="2"/>
+            <text class="sv-tb" x="370" y="240" text-anchor="middle">Check: schema valid? query runs?</text>
+            <text class="sv-n" x="370" y="258" text-anchor="middle">free · deterministic · no model involved</text>
+            <line class="sv-line" x1="525" y1="244" x2="600" y2="244" marker-end="url(#ah)"/>
+            <text class="sv-n" x="562" y="237" text-anchor="middle">passes</text>
+            <rect class="sv-box" x="600" y="224" width="100" height="40" rx="2"/>
+            <text class="sv-t" x="650" y="249" text-anchor="middle">Output</text>
+            <line class="sv-line" x1="370" y1="270" x2="370" y2="300" marker-end="url(#ah)"/>
+            <text class="sv-f" x="382" y="290">fails</text>
+            <rect class="sv-box" x="150" y="300" width="440" height="46" rx="2"/>
+            <text class="sv-tb" x="170" y="321">1</text>
+            <text class="sv-t" x="196" y="321">Free JSON extraction, same attempt</text>
+            <text class="sv-n" x="196" y="338">no new model call — a fenced payload never costs a retry</text>
+            <rect class="sv-paid" x="150" y="370" width="440" height="46" rx="2"/>
+            <text class="sv-tb" x="170" y="391">2</text>
+            <text class="sv-t" x="196" y="391">Retry the same model, failure text in the prompt</text>
+            <text class="sv-a" x="196" y="408">paid · bounded by the tier&#8217;s retry budget</text>
+            <rect class="sv-paid" x="150" y="440" width="440" height="46" rx="2"/>
+            <text class="sv-tb" x="170" y="461">3</text>
+            <text class="sv-t" x="196" y="461">Escalate: next model on the ladder</text>
+            <text class="sv-a" x="196" y="478">paid · one-shot · no tools, no session</text>
+            <rect class="sv-box" x="150" y="510" width="440" height="46" rx="2"/>
+            <text class="sv-t" x="196" y="531">Exhausted &#8594; best output obtained</text>
+            <text class="sv-s" x="196" y="548">plus a warning. Never fails the stage.</text>
+            <line class="sv-line" x1="370" y1="346" x2="370" y2="370" marker-end="url(#ah)"/>
+            <line class="sv-line" x1="370" y1="416" x2="370" y2="440" marker-end="url(#ah)"/>
+            <line class="sv-line" x1="370" y1="486" x2="370" y2="510" marker-end="url(#ah)"/>
+            <polyline class="sv-line" points="150,323 110,323 110,232 215,232" marker-end="url(#ah)"/>
+            <polyline class="sv-paid" points="150,463 70,463 70,257 215,257" marker-end="url(#ahp)"/>
+            <text class="sv-s" x="100" y="200" text-anchor="middle" transform="rotate(-90 100 200)">re-check</text>
+            <polyline class="sv-paid" points="590,393 745,393 745,172 455,172" marker-end="url(#ahp)"/>
+            <text class="sv-a" x="758" y="290" text-anchor="middle" transform="rotate(-90 758 290)">same model again</text>
+          </svg>
+        </div>
+        <figcaption><b>One leveled stage.</b> The tier lookup and the check are free and deterministic; the two paid hops are the retry and the escalation rung, attempted in that order. Note the two different return paths: a retry goes back to the <em>primary model</em>, while extraction and escalation return straight to the check. Exhausting everything is not an error — the stage continues with a warning.</figcaption>
+      </figure>
+
+      <pre>stages:
+  - agent_id: worker
+    output_policy:
+      output_schema: '{"type":"object","required":["records"]}'   <i># the check</i>
+    <b>leveling:</b>
+      <b>enabled: true</b>
+      <b>max_escalations: 1</b>          <i># rungs above the primary</i>
+      <b>max_cost_usd: 0.50</b>          <i># ceiling across the whole ladder</i>
+      <b>ladder:</b>
+        <b>- provider: anthropic</b>      <i># resolved from the agent's own pool</i>
+      <b>tier_policies:</b>
+        <b>local: { retry_budget: 2 }</b> <i># two free-model retries first</i></pre>
+    </section>
+
+    <section>
+      <h2>Model leveling: how the ladder knows what is above it <span class="status built">shipped</span></h2>
+      <p class="lede">Escalation only means something if the system knows which models are stronger than the one that just failed. Leveling keeps no capability benchmark for that. It reads two fields the model catalog already carries — per-token price, and whether the model is a reasoning model — and derives a tier.</p>
+
+      <div class="scroll">
+        <table>
+          <caption>Tier derivation — rules applied in this order</caption>
+          <thead><tr><th>Tier</th><th>Condition</th><th>Escalates?</th><th class="num">Default retries</th></tr></thead>
+          <tbody>
+            <tr><td class="tier">unknown</td><td>The provider/model pair is not in the catalog</td><td class="worst">No — refuses to guess</td><td class="num">0</td></tr>
+            <tr><td class="tier">local</td><td>Priced at zero in and zero out, i.e. self-hosted</td><td class="best">Yes</td><td class="num">2</td></tr>
+            <tr><td class="tier">small-open</td><td>Priced, not a reasoning model, output below the mid cutoff</td><td class="best">Yes</td><td class="num">2</td></tr>
+            <tr><td class="tier">mid</td><td>A reasoning model below the frontier cutoff, <em>or</em> a non-reasoning model at or above the mid cutoff</td><td>Not by default</td><td class="num">1</td></tr>
+            <tr><td class="tier">frontier</td><td>A reasoning model at or above the frontier cutoff</td><td class="worst">No — nothing above it</td><td class="num">0</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>Cutoffs are $10 and $1.50 per million output tokens, both configurable per stage. Rule order matters more than it looks: <strong>a zero-cost model is <code>local</code> even when it advertises reasoning</strong> — a self-hosted DeepSeek-R1 is a local model, because the property leveling cares about is that retrying it is free. And <strong>an expensive non-reasoning model lands in <code>mid</code></strong>, because <code>frontier</code> requires the reasoning flag; price alone does not buy the top tier.</p>
+
+      <h3>What a rung actually is</h3>
+      <p>A ladder rung is not another agent. It is a single chat call to a model the agent already has configured — one of its role models, or a named entry in its provider pool. Nothing is constructed and no routing layer is added. That keeps it cheap, and it costs something real:</p>
+      <ul>
+        <li><strong>No tools.</strong> A stage that depends on tool use cannot be rescued by escalation — the sharpest limitation in the feature.</li>
+        <li><strong>No system prompt, no session, no memory.</strong> There is no conversation for a one-shot call to join.</li>
+        <li>The rung gets the original prompt, the failure reason, and the previous output. That is all it knows.</li>
+      </ul>
+      <p>The winner's cost carries <strong>the whole ladder's spend</strong> — producing that output also paid for every retry and every losing rung. And <code>max_cost_usd</code> is checked <em>between</em> actions, never during one, so it can overshoot by a single call; the running total is a floor, because an attempt that ran a tool loop under-reports what it spent. It bounds runaway escalation. It is not a budget, and the code says so in those words.</p>
+    </section>
+
+    <section>
+      <h2>Retry, errors, and loops <span class="status built">shipped</span></h2>
+      <p class="lede">Three different things here get called "looping", and they behave completely differently. Telling them apart is the difference between a retry that fixes 8 failures out of 8 and one that fixes 0 out of 18.</p>
+
+      <figure>
+        <div class="figbox">
+          <svg viewBox="0 0 880 250" role="img" aria-label="Three loop types compared. A tool loop sends a query out to a database and gets rows back. A retry sends output to a checker and gets error text back. Self-critique loops from the model to itself with no external source, and repaired zero of eighteen wrong answers.">
+            <defs>
+              <marker id="bh" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                <path d="M0,0 L10,5 L0,10 z" fill="currentColor"/>
+              </marker>
+              <marker id="bf" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                <path d="M0,0 L10,5 L0,10 z" fill="var(--fail)"/>
+              </marker>
+            </defs>
+            <text class="sv-tb" x="16" y="20">Tool loop</text>
+            <text class="sv-s" x="16" y="36">within one attempt</text>
+            <rect class="sv-box" x="16" y="52" width="96" height="42" rx="2"/>
+            <text class="sv-t" x="64" y="78" text-anchor="middle">model</text>
+            <rect class="sv-box" x="164" y="52" width="104" height="42" rx="2"/>
+            <text class="sv-t" x="216" y="78" text-anchor="middle">index / DB</text>
+            <path class="sv-line" d="M112,64 C136,64 140,64 164,64" marker-end="url(#bh)"/>
+            <path class="sv-line" d="M164,84 C140,84 136,84 112,84" marker-end="url(#bh)"/>
+            <text class="sv-s" x="138" y="58" text-anchor="middle">query</text>
+            <text class="sv-s" x="138" y="104" text-anchor="middle">rows</text>
+            <text class="sv-n" x="16" y="136">0/30 &#8594; 30/30</text>
+            <text class="sv-s" x="16" y="152">weak model with retrieval,</text>
+            <text class="sv-s" x="16" y="167">beating the strong model alone</text>
+            <text class="sv-tb" x="316" y="20">Retry</text>
+            <text class="sv-s" x="316" y="36">a new attempt, same model</text>
+            <rect class="sv-box" x="316" y="52" width="96" height="42" rx="2"/>
+            <text class="sv-t" x="364" y="78" text-anchor="middle">model</text>
+            <rect class="sv-key" x="464" y="52" width="104" height="42" rx="2"/>
+            <text class="sv-t" x="516" y="78" text-anchor="middle">checker</text>
+            <path class="sv-line" d="M412,64 C436,64 440,64 464,64" marker-end="url(#bh)"/>
+            <path class="sv-line" d="M464,84 C440,84 436,84 412,84" marker-end="url(#bh)"/>
+            <text class="sv-s" x="438" y="58" text-anchor="middle">output</text>
+            <text class="sv-a" x="438" y="104" text-anchor="middle">error text</text>
+            <text class="sv-n" x="316" y="136">57% &#8594; 77%</text>
+            <text class="sv-s" x="316" y="152">SQL accuracy; all 8 crashes</text>
+            <text class="sv-s" x="316" y="167">resolved by one retry</text>
+            <text class="sv-tb" x="640" y="20">Self-critique</text>
+            <text class="sv-s" x="640" y="36">nothing comes in</text>
+            <rect class="sv-dead" x="640" y="52" width="96" height="42" rx="2"/>
+            <text class="sv-t" x="688" y="78" text-anchor="middle">model</text>
+            <path class="sv-dead" d="M736,62 C796,48 796,98 736,84" marker-end="url(#bf)"/>
+            <text class="sv-f" x="806" y="77">its own</text>
+            <text class="sv-f" x="806" y="91">output</text>
+            <text class="sv-f" x="640" y="136">0 of 18 repaired</text>
+            <text class="sv-s" x="640" y="152">asked to find its own error,</text>
+            <text class="sv-s" x="640" y="167">it found none</text>
+            <line class="sv-line" x1="16" y1="196" x2="864" y2="196"/>
+            <text class="sv-tb" x="16" y="222">A loop pays when information enters from outside the model.</text>
+            <text class="sv-s" x="16" y="240">Rows from an index and an error string from a checker are outside. A model&#8217;s opinion of its own answer is not.</text>
+          </svg>
+        </div>
+        <figcaption><b>The difference is the incoming arrow.</b> The first two loops import something the model did not have: rows from an index, an error message from a checker. The third has no external node at all, and it repaired nothing. Loop <em>count</em> is not the variable that matters — loop <em>content</em> is.</figcaption>
+      </figure>
+
+      <h3>The payload is the point</h3>
+      <p>A retry that just runs the model again is resampling, and resampling a weak model mostly returns a differently-worded version of the same mistake. What makes the retry rung work is <strong>what gets put back into the prompt</strong>:</p>
+      <pre><i># attempt 1 — the weak model writes a query</i>
+SELECT c.name, SUM(o.total_amount) FROM customers c JOIN orders o ...
+
+<i># the check runs it. sqlite answers:</i>
+<em>no such column: o.total_amount</em>
+
+<i># attempt 2 — that string is in the prompt now</i>
+SELECT c.name, SUM(oi.quantity * oi.unit_price) FROM customers c JOIN orders o ...
+<i># executes. correct.</i></pre>
+      <p>The database knows something the model does not, and the error message is the channel. All 8 execution failures resolved this way, which is where 57% → 77% came from. Compare the arm where a weak model was handed a semantic critique of its <em>reasoning</em> instead of a mechanical error: <strong>0 of 18 repaired.</strong> Same loop shape, no outside information, no effect.</p>
+
+      <div class="scroll">
+        <table>
+          <caption>The loops, disambiguated</caption>
+          <thead><tr><th>Loop</th><th>Scope</th><th>What comes in</th><th>Bounded by</th></tr></thead>
+          <tbody>
+            <tr><td><strong>Tool loop</strong></td><td>Within a single attempt</td><td>Tool and query results — the outside world</td><td><code>max_iterations</code>, <code>max_turns</code>, <code>max_tool_executions</code></td></tr>
+            <tr><td><strong>Retry</strong></td><td>A fresh attempt inside one run</td><td>The failure reason from the check</td><td><code>max_retries</code>, or the tier's <code>retry_budget</code></td></tr>
+            <tr><td><strong>Escalation</strong></td><td>A fresh attempt on a different model</td><td>The failure reason plus the previous output</td><td><code>max_escalations</code>, <code>max_cost_usd</code></td></tr>
+            <tr><td><strong>Self-critique</strong></td><td>—</td><td class="worst">Nothing</td><td class="worst">Not built. Measured and rejected</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="note hard">
+        <p class="lbl">The loop can launder a visible failure into an invisible one</p>
+        <p>A check that sees only <em>shape</em> cannot see <em>correctness</em>, and repairing the shape can destroy a right answer. <strong>2 of the 8 crashed SQL queries came back from retry as queries that ran and returned the wrong data.</strong> The crash was loud; the replacement is silent. In another trial the weak model produced the correct currency code in malformed JSON, and the retry produced valid JSON containing the <em>wrong</em> code — reported as success.</p>
+        <p>On an execution-only check, <strong>83.3% was the structural accuracy ceiling</strong>: 7 wrong queries executed cleanly, drew zero escalations, and were invisible by construction. The strong model solved all 7 — the ladder never sent them, because nothing free could tell it to.</p>
+      </div>
+    </section>
+
+    <section>
+      <h2>Raising that ceiling: let the database check the query <span class="status plan">designed, not built</span></h2>
+      <p class="lede">"Does it execute" is a weak question. A database can be asked much better ones, and every one of them is answerable without reading a row of data — which means the ceiling above is not a law, it is a consequence of only asking the cheapest question.</p>
+      <p>The idea is a second ladder, made of <strong>checks</strong> rather than models, climbed in the same cheapest-first order. Each rung sees something the rung below it cannot.</p>
+
+      <figure>
+        <div class="figbox">
+          <svg viewBox="0 0 860 420" role="img" aria-label="A ladder of checks ordered by cost: parse, DDL and metadata, EXPLAIN plan shape, DBQL history, execute, and result verification. Each catches something the cheaper checks cannot. When all available checks pass and the answer is still wrong, the free signal is exhausted and the only options are a stronger model or a human.">
+            <defs>
+              <marker id="ch" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                <path d="M0,0 L10,5 L0,10 z" fill="currentColor"/>
+              </marker>
+            </defs>
+            <text class="sv-s" x="16" y="22">COST</text>
+            <text class="sv-s" x="150" y="22">CHECK</text>
+            <text class="sv-s" x="330" y="22">WHAT IT CATCHES THAT THE CHEAPER CHECKS CANNOT</text>
+            <line class="sv-thin" x1="16" y1="32" x2="844" y2="32"/>
+
+            <text class="sv-n" x="16" y="58">no DB</text>
+            <text class="sv-tb" x="150" y="58">Parse</text>
+            <text class="sv-t" x="330" y="58">Syntax errors, before touching anything</text>
+            <line class="sv-thin" x1="16" y1="72" x2="844" y2="72"/>
+
+            <text class="sv-n" x="16" y="98">metadata</text>
+            <text class="sv-tb" x="150" y="98">DDL / schema</text>
+            <text class="sv-t" x="330" y="98">Invented columns, wrong types, join keys that are not keys</text>
+            <text class="sv-s" x="330" y="114">GetSchema already returns names, types and primary keys</text>
+            <line class="sv-thin" x1="16" y1="128" x2="844" y2="128"/>
+
+            <text class="sv-n" x="16" y="154">optimizer</text>
+            <text class="sv-tb" x="150" y="154">EXPLAIN</text>
+            <text class="sv-t" x="330" y="154">Names that bind but a plan that is wrong:</text>
+            <text class="sv-t" x="330" y="170">product joins, unexpected full scans, no-confidence estimates</text>
+            <line class="sv-thin" x1="16" y1="184" x2="844" y2="184"/>
+
+            <text class="sv-n" x="16" y="210">log query</text>
+            <text class="sv-tb" x="150" y="210">DBQL history</text>
+            <text class="sv-s" x="150" y="226">where available</text>
+            <text class="sv-t" x="330" y="210">A query shape never run here before, or one whose</text>
+            <text class="sv-t" x="330" y="226">estimated cost is far outside what this workload usually does</text>
+            <line class="sv-thin" x1="16" y1="240" x2="844" y2="240"/>
+
+            <text class="sv-a" x="16" y="266">runs it</text>
+            <text class="sv-tb" x="150" y="266">Execute</text>
+            <text class="sv-t" x="330" y="266">Runtime failures the optimizer accepted</text>
+            <text class="sv-s" x="330" y="282">the only rung measured so far — worth +20 points on its own</text>
+            <line class="sv-thin" x1="16" y1="296" x2="844" y2="296"/>
+
+            <text class="sv-a" x="16" y="322">model</text>
+            <text class="sv-tb" x="150" y="322">Verify the result</text>
+            <text class="sv-t" x="330" y="322">Answers that are wrong but ran cleanly</text>
+            <text class="sv-f" x="330" y="338">the only rung that can see the 7 silent failures — and it is not free</text>
+            <line class="sv-line" x1="16" y1="352" x2="844" y2="352"/>
+
+            <rect class="sv-dead" x="16" y="366" width="828" height="44" rx="2"/>
+            <text class="sv-tb" x="34" y="386">All available checks pass and the answer is still wrong</text>
+            <text class="sv-f" x="34" y="402">&#8594; free signal exhausted. Escalate the model, or hand it to a human. Do not loop.</text>
+          </svg>
+        </div>
+        <figcaption><b>A ladder of checks, not models.</b> The first three rungs read no data at all, and the second and third are the ones missing today — they are exactly where a wrong join becomes visible, because a wrong join <em>looks wrong in a plan</em>. The terminal state matters as much as the rungs: when every available check passes and the answer is still wrong, the loop is out of information and must stop rather than spin. <b>None of this is built</b> — the primitives exist, the ladder does not.</figcaption>
+      </figure>
+
+      <h3>Why EXPLAIN is the interesting rung</h3>
+      <p>EXPLAIN binds every name and produces a plan without reading a row. That makes it strictly stronger than "does it execute" and strictly cheaper:</p>
+      <ul>
+        <li><strong>It is a correctness signal disguised as a performance tool.</strong> The 7 silent failures in the benchmark were wrong joins and invented arithmetic. A wrong join shows up in a plan as a product join or a scan nobody asked for — visible without running anything.</li>
+        <li><strong>The optimizer reports its own confidence.</strong> A plan built on no-confidence estimates is a plan over columns the optimizer knows nothing useful about, which is often a sign the query is not asking what the author meant.</li>
+        <li><strong>It is safe.</strong> No data is read and nothing is mutated, which matters because escalation rungs run without tools — a check that needs no tool call fits where a repair cannot.</li>
+      </ul>
+      <p><strong>DDL is the rung below it</strong> and the cheapest real check available: <code>fabric.GetSchema</code> already returns each field's name, type, nullability and primary-key flag. Comparing a generated query's column references against that catches invented columns and wrong join keys before the optimizer is even consulted.</p>
+      <p><strong>DBQL is the rung above</strong>, and the only one that needs the phrase "where available". Today DBQL appears in Loom solely as domain knowledge inside Teradata performance patterns — things an agent can be told to query when <em>analysing</em> a system. Using it as a verification signal is different: it turns the query log into a baseline, so "this shape of query has never run on this system" or "the estimate is two orders of magnitude off the usual" becomes a flag. Backends already advertise what they can do through <code>Capabilities.Features</code>, which is where a check ladder would discover whether EXPLAIN and DBQL are reachable at all.</p>
+
+      <div class="note good">
+        <p class="lbl">Why this is the highest-value thing not yet built</p>
+        <p>Every measured gain so far came from a free check plus a cheap retry. The measured ceiling came from the check being shallow. Deepening the check ladder attacks the ceiling directly, needs no new model, no new provider plumbing, and no change to the effort or model axes — and unlike the model ladder, it was never the part that failed to fire.</p>
+      </div>
+      <p>One honest caveat: a deeper check is still a check. Rungs 1–4 verify that a query is <em>well-formed and plausible</em>, not that it answers the question asked. Result verification is the only rung that sees meaning, and it costs a model call — which makes the top of this ladder a cost decision, not a capability one.</p>
+    </section>
+
+    <section>
+      <h2>Two axes, one dial</h2>
+      <p class="lede">There are two independent ways to spend more on a stage. Use a <strong>better model</strong>, or make the <strong>same model work harder</strong>. They are separate controls, they influence each other, and the measurements only mean anything because each was moved on its own.</p>
+
+      <figure>
+        <div class="figbox">
+          <svg viewBox="0 0 700 440" role="img" aria-label="A plane with model strength on the horizontal axis and effort on the vertical axis. From the weak one-shot starting point, moving up one step of effort bought six more correct answers for five extra calls; moving right to the strong model bought thirteen more correct answers but was sixteen times slower. A dashed diagonal shows a preset as a path through the plane.">
+            <defs>
+              <marker id="dh" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                <path d="M0,0 L10,5 L0,10 z" fill="currentColor"/>
+              </marker>
+              <marker id="dn" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+                <path d="M0,0 L10,5 L0,10 z" fill="var(--pay)"/>
+              </marker>
+              <marker id="da" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+                <path d="M0,0 L10,5 L0,10 z" fill="var(--accent)"/>
+              </marker>
+            </defs>
+
+            <!-- axes -->
+            <line class="sv-line" x1="120" y1="350" x2="640" y2="350" marker-end="url(#dh)"/>
+            <line class="sv-line" x1="120" y1="350" x2="120" y2="40" marker-end="url(#dh)"/>
+            <text class="sv-tb" x="380" y="392" text-anchor="middle">which model answers &#8594;</text>
+            <text class="sv-s" x="380" y="410" text-anchor="middle">price per token. someone else answers.</text>
+            <text class="sv-tb" x="28" y="195" text-anchor="middle" transform="rotate(-90 28 195)">how hard it works &#8594;</text>
+
+            <!-- x ticks -->
+            <text class="sv-s" x="180" y="368" text-anchor="middle">local</text>
+            <text class="sv-s" x="300" y="368" text-anchor="middle">small-open</text>
+            <text class="sv-s" x="420" y="368" text-anchor="middle">mid</text>
+            <text class="sv-s" x="540" y="368" text-anchor="middle">frontier</text>
+            <!-- y ticks -->
+            <text class="sv-s" x="112" y="314" text-anchor="end">one shot</text>
+            <text class="sv-s" x="112" y="244" text-anchor="end">+ retries</text>
+            <text class="sv-s" x="112" y="174" text-anchor="end">+ loops</text>
+            <text class="sv-s" x="112" y="104" text-anchor="end">+ thinking</text>
+            <line class="sv-thin" x1="120" y1="310" x2="620" y2="310"/>
+            <line class="sv-thin" x1="120" y1="240" x2="620" y2="240"/>
+            <line class="sv-thin" x1="120" y1="170" x2="620" y2="170"/>
+            <line class="sv-thin" x1="120" y1="100" x2="620" y2="100"/>
+
+            <!-- unreachable band: no in-model thinking on local / small-open -->
+            <line class="sv-dead" x1="130" y1="100" x2="350" y2="100" stroke-dasharray="4 4"/>
+            <text class="sv-f" x="140" y="90">no in-model thinking on these models</text>
+
+            <!-- measured points -->
+            <circle cx="180" cy="310" r="5" fill="currentColor"/>
+            <text class="sv-s" x="168" y="306" text-anchor="end">17/30</text>
+            <circle cx="180" cy="240" r="5" fill="var(--pay)"/>
+            <text class="sv-n" x="192" y="236">23/30</text>
+            <circle cx="540" cy="310" r="5" fill="var(--accent)"/>
+            <text class="sv-a" x="524" y="328" text-anchor="end">30/30</text>
+
+            <!-- the two moves -->
+            <line class="sv-line" x1="180" y1="302" x2="180" y2="250" stroke="var(--pay)" stroke-width="2" marker-end="url(#dn)"/>
+            <text class="sv-n" x="196" y="272">work harder</text>
+            <text class="sv-s" x="196" y="288">+6 correct, +8 calls</text>
+            <line class="sv-line" x1="192" y1="310" x2="528" y2="310" stroke="var(--accent)" stroke-width="2" marker-end="url(#da)"/>
+            <text class="sv-a" x="360" y="302" text-anchor="middle">better model</text>
+            <text class="sv-s" x="400" y="330" text-anchor="middle">+13 correct, 16&#215; slower</text>
+
+            <!-- preset path -->
+            <path class="sv-line" d="M340,266 C400,250 445,198 520,120" stroke-dasharray="5 5" opacity=".8"/>
+            <circle cx="340" cy="266" r="3.5" fill="none" stroke="currentColor"/>
+            <circle cx="424" cy="216" r="3.5" fill="none" stroke="currentColor"/>
+            <circle cx="520" cy="120" r="3.5" fill="none" stroke="currentColor"/>
+            <text class="sv-tb" x="536" y="118">one dial</text>
+            <text class="sv-s" x="536" y="134">a preset is a path</text>
+            <text class="sv-s" x="536" y="148">through this plane</text>
+          </svg>
+        </div>
+        <figcaption><b>Two moves from the same starting point.</b> Going up bought 6 correct answers for 8 extra cheap calls; going right bought 13 but ran 16× slower. Both are real, and which is right depends entirely on whether silent wrongness is tolerable downstream. The vertical axis stacks three currencies — thinking, loops and retries — and only the thinking band has the dead zone marked at the top left: <b>loops and retries work on every model</b>, which is why they are the dependable currency. The dashed line is the point of a single <em>effort</em> dial: not a third axis, but a chosen path across these two — which is also why a preset must record where it landed, or the next benchmark cannot tell which axis moved.</figcaption>
+      </figure>
+
+      <h3>Independent, but not unrelated</h3>
+      <p>They move separately — you can raise effort without touching the model, and swap the model without touching effort. Three things nonetheless couple them, and all three are visible in the figure:</p>
+      <ul>
+        <li><strong>Capability.</strong> Not every model accepts a thinking budget. The dashed band marks where that band of the vertical axis simply does not exist — and notably, it is exactly the cheap end, where leveling matters most. Loop depth and retries have no such dead zone, which is why they are the dependable currency.</li>
+        <li><strong>Cost.</strong> Moving right multiplies the price of every token; moving up multiplies the number of tokens. Whether high effort on a mid model beats one shot at a frontier model is arithmetic the catalog can do — and is <em>unmeasured</em>, because every arm we ran was priced at zero.</li>
+        <li><strong>Substitution.</strong> A model that thinks longer may need fewer loops. Nobody knows by how much; that is the experiment, not the design.</li>
+      </ul>
+
+      <h3>The thinking level that is already named but not yet wired <span class="status dead">dead knob</span></h3>
+      <p>Worth being precise about, because it looks finished: a <code>thinking_level</code> field already exists with the vocabulary <code>none</code> / <code>low</code> / <code>medium</code> / <code>high</code>, and six agent presets set it to <code>high</code>. The agent config loader never reads it. <strong>An agent created from a "deep thinking" preset gets no thinking</strong>, and nothing in the LLM provider interface can carry a thinking budget on a request anyway — temperature and max-tokens are fixed when the client is constructed.</p>
+      <p>That is good news in one narrow sense: the vocabulary is settled, so the effort axis should wire <em>that</em> name rather than invent a second one next to it. But it has to be wired or removed before it means anything. This project has form here — two per-tier knobs were deleted from the proto before merge rather than shipped as settings that controlled nothing.</p>
+    </section>
+
+    <section>
+      <h2>The dial: an equalizer, not a volume knob <span class="status plan">proposed</span></h2>
+      <p class="lede">The right model for the effort control is a graphic equalizer. An engineer gets the individual sliders. Everyone else gets a named preset that moves them together — and the preset is nothing more than a remembered position of those same sliders.</p>
+
+      <figure>
+        <div class="figbox">
+          <svg viewBox="0 0 820 400" role="img" aria-label="A five-band equalizer with bands for model tier, thinking, loops, retries and checks. Three preset curves are drawn across the bands: Draft sits low everywhere, Contract raises retries and checks on a cheap model, and Audit raises checks and loops to their maximum.">
+            <!-- band frames -->
+            <g stroke="currentColor" stroke-width="9" opacity=".11" stroke-linecap="round">
+              <line x1="130" y1="64" x2="130" y2="266"/>
+              <line x1="270" y1="64" x2="270" y2="266"/>
+              <line x1="410" y1="64" x2="410" y2="266"/>
+              <line x1="550" y1="64" x2="550" y2="266"/>
+              <line x1="690" y1="64" x2="690" y2="266"/>
+            </g>
+            <g stroke="currentColor" stroke-width="1" opacity=".4">
+              <line x1="130" y1="64" x2="130" y2="266"/>
+              <line x1="270" y1="64" x2="270" y2="266"/>
+              <line x1="410" y1="64" x2="410" y2="266"/>
+              <line x1="550" y1="64" x2="550" y2="266"/>
+              <line x1="690" y1="64" x2="690" y2="266"/>
+            </g>
+            <!-- detents -->
+            <g class="sv-thin">
+              <line x1="120" y1="70" x2="140" y2="70"/><line x1="120" y1="120" x2="140" y2="120"/>
+              <line x1="120" y1="170" x2="140" y2="170"/><line x1="120" y1="220" x2="140" y2="220"/>
+              <line x1="120" y1="270" x2="140" y2="270"/>
+              <line x1="260" y1="70" x2="280" y2="70"/><line x1="260" y1="120" x2="280" y2="120"/>
+              <line x1="260" y1="170" x2="280" y2="170"/><line x1="260" y1="220" x2="280" y2="220"/>
+              <line x1="260" y1="270" x2="280" y2="270"/>
+              <line x1="400" y1="70" x2="420" y2="70"/><line x1="400" y1="120" x2="420" y2="120"/>
+              <line x1="400" y1="170" x2="420" y2="170"/><line x1="400" y1="220" x2="420" y2="220"/>
+              <line x1="400" y1="270" x2="420" y2="270"/>
+              <line x1="540" y1="70" x2="560" y2="70"/><line x1="540" y1="120" x2="560" y2="120"/>
+              <line x1="540" y1="170" x2="560" y2="170"/><line x1="540" y1="220" x2="560" y2="220"/>
+              <line x1="540" y1="270" x2="560" y2="270"/>
+              <line x1="680" y1="70" x2="700" y2="70"/><line x1="680" y1="120" x2="700" y2="120"/>
+              <line x1="680" y1="170" x2="700" y2="170"/><line x1="680" y1="220" x2="700" y2="220"/>
+              <line x1="680" y1="270" x2="700" y2="270"/>
+            </g>
+            <!-- band labels -->
+            <text class="sv-tb" x="130" y="296" text-anchor="middle">model</text>
+            <text class="sv-s" x="130" y="312" text-anchor="middle">tier</text>
+            <text class="sv-tb" x="270" y="296" text-anchor="middle">thinking</text>
+            <text class="sv-f" x="270" y="312" text-anchor="middle">not wired</text>
+            <text class="sv-tb" x="410" y="296" text-anchor="middle">loops</text>
+            <text class="sv-s" x="410" y="312" text-anchor="middle">tool calls</text>
+            <text class="sv-tb" x="550" y="296" text-anchor="middle">retries</text>
+            <text class="sv-n" x="550" y="312" text-anchor="middle">shipped</text>
+            <text class="sv-tb" x="690" y="296" text-anchor="middle">checks</text>
+            <text class="sv-a" x="690" y="312" text-anchor="middle">shallow today</text>
+            <text class="sv-s" x="104" y="74" text-anchor="end">max</text>
+            <text class="sv-s" x="104" y="274" text-anchor="end">min</text>
+
+            <!-- Draft: 0,0,1,0,1  -> y 270,270,220,270,220 -->
+            <polyline class="sv-line" points="130,270 270,270 410,220 550,270 690,220" opacity=".85"/>
+            <g fill="currentColor">
+              <circle cx="130" cy="270" r="4"/><circle cx="270" cy="270" r="4"/>
+              <circle cx="410" cy="220" r="4"/><circle cx="550" cy="270" r="4"/><circle cx="690" cy="220" r="4"/>
+            </g>
+            <!-- Contract: 0,0,1,3,2 -> 270,270,220,120,170 -->
+            <polyline class="sv-line" points="130,270 270,270 410,220 550,120 690,170"
+              stroke="var(--pay)" stroke-width="2" stroke-dasharray="6 4"/>
+            <g fill="var(--pay)">
+              <circle cx="130" cy="270" r="4"/><circle cx="270" cy="270" r="4"/>
+              <circle cx="410" cy="220" r="4"/><circle cx="550" cy="120" r="4"/><circle cx="690" cy="170" r="4"/>
+            </g>
+            <!-- Audit: 2,2,3,2,4 -> 170,170,120,170,70 -->
+            <polyline class="sv-line" points="130,170 270,170 410,120 550,170 690,70"
+              stroke="var(--accent)" stroke-width="2" stroke-dasharray="1 4"/>
+            <g fill="var(--accent)">
+              <circle cx="130" cy="170" r="4"/><circle cx="270" cy="170" r="4"/>
+              <circle cx="410" cy="120" r="4"/><circle cx="550" cy="170" r="4"/><circle cx="690" cy="70" r="4"/>
+            </g>
+
+            <!-- legend -->
+            <line class="sv-line" x1="130" y1="344" x2="176" y2="344" opacity=".85"/>
+            <text class="sv-tb" x="186" y="348">Draft</text>
+            <text class="sv-s" x="238" y="348">cheapest path. wrong answers are acceptable here.</text>
+            <line class="sv-line" x1="130" y1="366" x2="176" y2="366" stroke="var(--pay)" stroke-width="2" stroke-dasharray="6 4"/>
+            <text class="sv-tb" x="186" y="370">Contract</text>
+            <text class="sv-s" x="256" y="370">cheap model, many retries: the configuration that was actually measured.</text>
+            <line class="sv-line" x1="130" y1="388" x2="176" y2="388" stroke="var(--accent)" stroke-width="2" stroke-dasharray="1 4"/>
+            <text class="sv-tb" x="186" y="392">Audit</text>
+            <text class="sv-s" x="238" y="392">deep checks first, because silent wrongness is the thing being bought out.</text>
+          </svg>
+        </div>
+        <figcaption><b>Same five sliders, three remembered positions.</b> Presets exist because nobody can reason about five independent knobs, exactly as nobody dials seven frequency bands by hand. The critical property is that the preset is a <em>position</em>, not a hidden behaviour: the sliders stay individually addressable, and what a preset set each band to is recorded — otherwise the next measurement cannot attribute its own result. Note that <code>Contract</code> spends nothing on model tier or thinking and everything on retries, which is precisely the shape the SQL benchmark found to work.</figcaption>
+      </figure>
+
+      <p>Names should describe the workload, not the sound — a reader picking a preset needs to know what it does to their bill and their error rate. <code>Draft</code>, <code>Contract</code> and <code>Audit</code> above are placeholders that at least say that much. The band layout also makes one thing pleasantly obvious: the leftmost slider is a different <em>kind</em> of thing from the other four. Moving it changes who answers; moving any of the others changes how hard the same model works.</p>
+    </section>
+
+    <section>
+      <h2>What was measured</h2>
+      <p class="lede">Five phases against live local models, plus a replay over the committed per-trial data. The SQL benchmark is closest to a real workload: 30 questions, generated SQL actually executed against SQLite, scored by result-set equality against reference queries.</p>
+      <div class="scroll">
+        <table>
+          <caption>N=30, seeded, identical questions across arms — weak model llama3.2, strong model deepseek-r1</caption>
+          <thead><tr><th>Arm</th><th class="num">Correct</th><th class="num">Silently wrong</th><th class="num">Crashed</th><th class="num">Calls</th><th class="num">Strong-model calls</th><th class="num">Seconds</th></tr></thead>
+          <tbody>
+            <tr><td>Weak model alone</td><td class="num">17</td><td class="num">5</td><td class="num worst">8</td><td class="num">30</td><td class="num">0</td><td class="num">25.3</td></tr>
+            <tr><td>+ free retry on error</td><td class="num best">23</td><td class="num">7</td><td class="num best">0</td><td class="num">38</td><td class="num">0</td><td class="num">30.4</td></tr>
+            <tr><td>+ ladder to the strong model</td><td class="num best">23</td><td class="num">7</td><td class="num best">0</td><td class="num">38</td><td class="num worst">0</td><td class="num">29.7</td></tr>
+            <tr><td>Strong model alone</td><td class="num">30</td><td class="num">0</td><td class="num">0</td><td class="num">30</td><td class="num">30</td><td class="num">475.2</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p><strong>The expensive rung never fired.</strong> The ladder arm made zero calls to the strong model — the free retry had already fixed everything the check could see. In an earlier phase it fired once in 20 trials, then zero times in 10. The feature's headline mechanism contributed nothing on this workload; the cheap rung contributed all of it.</p>
+      <div class="figures">
+        <div class="fig2"><span class="n up">30/30</span><span class="l">Malformed outputs rescued by <b>free extraction</b>, with no model call at all.</span></div>
+        <div class="fig2"><span class="n up">0/30 → 30/30</span><span class="l">Keyword retrieval on a knowledge task — where the <b>strong model alone also scored 0/30</b>.</span></div>
+        <div class="fig2"><span class="n flat">+0 calls</span><span class="l">When the first attempt passes: 10 calls for 10 tasks, <b>asserted by the test suite</b>.</span></div>
+      </div>
+      <p>Two interventions were measured and <strong>rejected</strong> rather than shipped. Self-critique repaired 0 of 18 wrong answers. Forcing step-by-step structure made a weak model monotonically worse — 27% then 3% against a 40% baseline — and its configuration knob was deleted before merge rather than left as a dead setting.</p>
+      <p>One caveat governs everything above: <strong>both models were local and priced at zero</strong>, so nothing here says anything about dollars, and the ladder has never actually escalated across a price tier.</p>
+    </section>
+
+    <section>
+      <h2>What it closes, and what it does not</h2>
+      <div class="ledger">
+        <div class="does">
+          <h4>Closes</h4>
+          <ul>
+            <li>Malformed or unparseable structured output<span class="ev">5/10 → 10/10 schema pass; 30/30 rescued free</span></li>
+            <li>Calls and queries that crash<span class="ev">8 execution failures → 0</span></li>
+            <li>Missing facts, when retrieval can reach them<span class="ev">0/30 → 30/30 with keyword search</span></li>
+            <li>Paying frontier prices for work a cheap model can do<span class="ev">0 strong-model calls needed across 30 questions</span></li>
+          </ul>
+        </div>
+        <div class="doesnt">
+          <h4>Does not close</h4>
+          <ul>
+            <li>Reasoning. The ceiling is routed around, never raised<span class="ev">self-critique 0/18; scaffolding −13 and −37 points</span></li>
+            <li>Answers that are wrong but well-formed<span class="ev">7 wrong queries ran clean, 0 escalations</span></li>
+            <li>Knowledge no model on the ladder has<span class="ev">every arm returned the same outdated answer</span></li>
+            <li>Tool-dependent stages, at the escalation rung<span class="ev">rungs are one-shot calls with no tools</span></li>
+          </ul>
+        </div>
+      </div>
+      <blockquote>Leveling makes a weak model's output meet a contract, and routes past the model when a free signal can see that it should. It does not make the model smarter.</blockquote>
+    </section>
+
+    <section>
+      <h2>Where it stands</h2>
+      <div class="scroll">
+        <table>
+          <thead><tr><th>Piece</th><th>State</th><th>What is missing</th></tr></thead>
+          <tbody>
+            <tr><td>Model ladder, tiers, ceilings, tracing</td><td class="best">Shipped in v1.4.0</td><td>Never measured across a price tier</td></tr>
+            <tr><td>Retry with failure feedback</td><td class="best">Shipped</td><td>Keyed on model price, when the evidence says it should key on failure class</td></tr>
+            <tr><td>Free JSON extraction</td><td class="best">Shipped</td><td>—</td></tr>
+            <tr><td>Checks: schema and execution</td><td>Schema from config; execution in Go only</td><td>DDL, EXPLAIN and DBQL rungs — the ceiling-raisers</td></tr>
+            <tr><td>Loop depth as a stage control</td><td>Agent-level only</td><td>No per-stage surface; the cost gate cannot see it</td></tr>
+            <tr><td><code>thinking_level</code></td><td class="worst">Named, never read</td><td>Provider plumbing, then a config surface — in that order</td></tr>
+            <tr><td>The effort dial and presets</td><td>Proposed</td><td>Everything above it</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>The order that falls out of this is not the order of ambition. The check ladder comes first, because it is free, it needs no new plumbing, and it attacks the one ceiling that was actually measured. Loop depth comes next, because it works on every model including the ones that cannot think harder. In-model thinking comes last, because it is unavailable on exactly the models this feature exists to help — and because a knob that controls nothing is worse than no knob at all, which this codebase has already learned twice.</p>
+    </section>
+
+  </main>
+</div>
+
+<footer>
+  <div class="footer-in">
+    <p>Measured figures come from <strong>docs/plan-capability-leveling.md</strong> (Phases 2b–5) and the per-trial data in <strong>docs/experiments/</strong>, recomputed by <strong>docs/experiments/probe_join_depth.py</strong>. The shipped configuration surface is <strong>docs/reference/workflow-leveling.md</strong>; the effort-axis design is <strong>docs/plan-effort-leveling.md</strong>. The check ladder, the effort dial and the presets are proposals and are marked as such.</p>
+    <p>teradata-labs/loom &nbsp;·&nbsp; branch claude/capability-leveling-feature-bw4yy8</p>
+  </div>
+</footer>

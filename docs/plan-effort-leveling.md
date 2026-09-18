@@ -10,6 +10,21 @@ proves less than it appears to.
 **Date**: 2026-09-18
 **Loom version at writing**: v1.4.0
 
+## Companion documents
+
+This record and the reader-facing explainer are two altitudes on one body of work, and
+neither is derived from the other:
+
+| Document | Altitude | Owns |
+|---|---|---|
+| **this record** — `docs/plan-effort-leveling.md` | how to build it | control boundaries, invariants, falsification criteria, evidence |
+| **the explainer** — `docs/explainers/capability-leveling.html` | what it is and whether it works | the shipped mechanism, the measured results, the trade-offs, the diagrams |
+| the reference — `docs/reference/workflow-leveling.md` | how to configure it | every key, default and error of the shipped surface |
+
+Every idea in the explainer has a home here. That is the rule that keeps them from drifting
+into two different features: the explainer may be rewritten freely, but nothing may exist
+only there.
+
 ## Goal
 
 Capability leveling ships one axis: **model identity**, with tier derived from catalog
@@ -32,15 +47,18 @@ be first-class controls rather than a side effect of the model ladder.
 
 ## Table of Contents
 
+- [Companion documents](#companion-documents)
 - [Influence is not coupling](#influence-is-not-coupling)
 - [The controls](#the-controls)
 - [The information-gain principle](#the-information-gain-principle)
+- [The check ladder](#the-check-ladder)
 - [What the record does not measure](#what-the-record-does-not-measure)
 - [Pairwise interaction matrix](#pairwise-interaction-matrix)
 - [The scope mismatch](#the-scope-mismatch)
 - [Coupling hazards](#coupling-hazards)
 - [Prerequisites](#prerequisites)
 - [The orthogonality test](#the-orthogonality-test)
+- [The dial and its presets](#the-dial-and-its-presets)
 - [Invariants](#invariants)
 - [Build order](#build-order)
 - [Phase 0 — the zero-cost replay](#phase-0--the-zero-cost-replay)
@@ -78,13 +96,22 @@ into model or agent identity manufactures that same confound by construction, pe
 | **B2** | Loop depth | more tool/observe iterations within one attempt | agent (`BehaviorConfig`) | ✅ |
 | **C** | Retry with feedback | another attempt carrying failure information | **stage** (`retry_policy`) | ✅ |
 | **D** | Learning | better prompt content on *future* runs | agent (`PatternConfig`) + learning DB | ✅ |
+| **S** | Checking depth | a verdict that can see more kinds of wrong | **stage** (`output_policy`), schema only | ✅ |
+
+**S** was an input in the first draft of this record and is a control in this one. How deep
+you check is something you *buy*, on its own ladder, and getting it wrong is what produced
+the only ceiling the program actually measured. See [The check ladder](#the-check-ladder).
 
 Two **inputs**, which are not controls:
 
 | | Input | When | Cost | Shipped? |
 |---|---|---|---|---|
-| **V** | Verdict class (schema / execution / plan / judge) | post-flight | free…paid | ⚠️ schema only |
+| **V** | Verdict *class* the check returns (format / execution / plan / meaning) | post-flight | — | ⚠️ not carried |
 | **X** | Pre-flight complexity estimate (join depth, code metrics) | pre-flight | free | ❌ |
+
+**S** and **V** are easy to confuse and must not be: **S** is how much checking you paid
+for, **V** is what the check came back and said. **S** is a dial; **V** is a label that
+should travel with the failure so **C** can key on it.
 
 And **Bounds** (`max_escalations`, `max_cost_usd`), which are cross-cutting.
 
@@ -183,6 +210,68 @@ so **B1** could not have been tested here even if it were wired. That is not a g
 experiment; it is the structural point of this plan, with the models named. `B2` and `C` worked
 on both.
 
+## The check ladder
+
+📋 **Designed, not built.** The shipped verdict is a JSON Schema from config, or an
+execution check written in Go for the benchmark. Everything below is a proposal.
+
+The measured 83.3% ceiling is not a law about weak models. It is a consequence of asking a
+database the cheapest possible question — "did it run" — when a database can answer much
+better ones, most of them without reading a row.
+
+| # | Check | Cost class | Catches what the cheaper rungs cannot |
+|---|---|---|---|
+| 1 | Parse | no DB | Syntax errors, before touching anything |
+| 2 | DDL / schema | metadata only | Invented columns, wrong types, join keys that are not keys |
+| 3 | EXPLAIN | optimizer only | Names that bind but a plan that is wrong: product joins, unexpected full scans, no-confidence estimates |
+| 4 | DBQL history | one log query | A query shape never run on this system, or an estimate far outside what this workload does |
+| 5 | Execute | reads data | Runtime failures the optimizer accepted |
+| 6 | Verify the result | one model call | Answers that are wrong but ran cleanly |
+
+Rung 5 is the only one measured so far, and on its own it was worth +20 points. Rungs 2–4
+are the missing ones, and they are missing on the cheap side of the ladder.
+
+### Why EXPLAIN is the load-bearing rung
+
+The 7 silent failures in Phase 5 were wrong joins and invented arithmetic. A wrong join is
+visible in a plan — as a product join, or a scan nobody asked for — **without executing
+anything**. That makes rung 3 strictly stronger than rung 5 and strictly cheaper, which is
+the first time in this program that a signal has been available on both counts. The
+optimizer also reports its own confidence, and a plan built on no-confidence estimates is
+frequently a query that is not asking what its author meant.
+
+It is also safe in a way that matters structurally: it reads no data and mutates nothing.
+Escalation rungs run without tools, so a check that needs no tool call fits in places a
+repair cannot.
+
+### What exists to build it on
+
+| Primitive | State |
+|---|---|
+| `fabric.GetSchema` returning field name, type, nullability, primary key | ✅ shipped — rung 2 needs no new plumbing |
+| `fabric.ExecuteQuery` (an `EXPLAIN …` is just a query) | ✅ shipped |
+| `Capabilities.Features` / `SupportedOperations` — how a backend advertises EXPLAIN or DBQL reachability | ✅ shipped — this is what "where available" resolves against |
+| An EXPLAIN **plan parser** | ❌ absent. `pkg/mcp/apps/html/explain-plan-visualizer.html` is a display surface registered as an MCP resource, with nothing in Go producing plan data for it — a renderer, not a parser |
+| DBQL as a verification baseline | ❌ absent. DBQL appears only as domain knowledge inside Teradata performance patterns, for *analysing* a system |
+
+### Termination is part of the design
+
+A ladder of checks that does not know when to stop is a loop that spins. The rule:
+
+> When every check available on this backend passes and the answer is still wrong, the loop
+> is out of information. Escalate the model, or hand it to a human. Do not re-check.
+
+That is the honest end of the free-signal path, and it is why **S** has a ceiling like every
+other control rather than running until something breaks.
+
+### The caveat that survives all of this
+
+Rungs 1–4 verify that a query is **well-formed and plausible**, not that it answers the
+question that was asked. Only rung 6 sees meaning, and it costs a model call — which makes
+the top of this ladder a cost decision, not a capability one. Phase 3b measured what that
+costs: a reasoning model as critic agreed 20/20, at ~31s per verdict against ~18s to
+generate the answer in the first place.
+
 ## Pairwise interaction matrix
 
 | Pair | Do they influence each other? | Coupling risk | What keeps them separate |
@@ -192,6 +281,9 @@ on both.
 | **A × C** | Asymmetric, and measured: C repairs format and execution failures on weak models (+20pp) and does not repair reasoning (0/18) | **Already shipped** — `tier_policies.<tier>.retry_budget` keys C off A's *price* | C should key on **V**, not A |
 | **B1 × B2** | Unknown. Both spend output tokens; a thinking model may need fewer loops | **Low structurally, high via a composite dial** | Each currency individually addressable and individually recorded |
 | **A × D** | Learned patterns are prompt content, and weak models use prompt content (75/75 again) | **Medium** — keying learned artifacts per-model fragments the corpus M ways | Key learning by task/domain; record model as a *dimension*, never a partition key |
+| **S × A** | **This is the pairing that matters.** A deeper check is what tells the model ladder when to fire; on an execution-only check the ladder could not see the 7 failures the strong model would have fixed | **Low** — they are different kinds of thing | Nothing to do beyond not conflating **S** with **V** |
+| **S × C** | Measured: the check's *payload* is what makes retry work at all (+20pp with the sqlite error text, 0/18 with a critique) | **Already shipped** — `retry_budget` keys off tier price, not the verdict class | Carry **V** with the failure, then key **C** on it |
+| **S × B2** | A check that runs through a tool spends the agent's tool budget | **Medium** — a deeper check could silently starve the loop it shares a budget with | Check cost is metered as **S**, never charged to **B2** |
 | **Bounds × all** | All currencies must become commensurable in USD and wall-clock | **Legitimate join** | One cost function, one place — but see [Prerequisites](#prerequisites) |
 
 The standout is **A × B2**. Phase 4's context-utilization finding — "whenever the gold fact
@@ -352,6 +444,41 @@ Worked results:
 | Single composite `effort: high` with no per-currency record | 2, 3 |
 | `tier_policies.<tier>.retry_budget` (shipped) | 2 — retry budget cannot be varied independently of tier |
 
+## The dial and its presets
+
+📋 **Proposed.** The model for the effort control is a graphic equalizer: five bands, and
+named presets that are nothing more than a remembered position of those same sliders.
+
+| Band | Control | State today |
+|---|---|---|
+| model tier | **A** | ✅ shipped |
+| thinking | **B1** | ❌ named, never read |
+| loops | **B2** | ⚠️ agent scope only |
+| retries | **C** | ✅ shipped |
+| checks | **S** | ⚠️ schema only |
+
+Three placeholder presets, each a real configuration rather than a mood:
+
+| Preset | Shape | Why |
+|---|---|---|
+| `Draft` | low on everything | Wrong answers are acceptable at this stage |
+| `Contract` | cheap model, no thinking, **many retries**, moderate checks | The configuration the SQL benchmark actually validated |
+| `Audit` | **maximum checks**, high loops, mid model | Silent wrongness is the thing being bought out |
+
+Two requirements, both following directly from invariant 7:
+
+1. **A preset is a position, not a behaviour.** Every band stays individually addressable,
+   and the position a preset set is recorded per band. A dial that moves three currencies
+   without saying so makes the next benchmark unable to attribute its own result — which
+   would destroy exactly the property that made every finding in this document legible.
+2. **Names describe the workload, not the sound.** Someone choosing a preset needs to know
+   what it does to their bill and their error rate. `Draft` / `Contract` / `Audit` at least
+   say that much; the final names are an open question.
+
+The band layout makes one thing plain that prose kept fumbling: the leftmost slider is a
+different *kind* of thing from the other four. Moving it changes who answers. Moving any of
+the others changes how hard the same model works.
+
 ## Invariants
 
 Cheap to hold today, and each one preserves an option that is expensive to recover later.
@@ -369,6 +496,13 @@ Cheap to hold today, and each one preserves an option that is expensive to recov
    loop-depth or pattern-recall dial, and every realization is recorded per currency.
 8. **Learning is downstream of leveling, never a rung.** One direction, report-shaped.
 
+9. **The check ladder terminates.** When every check available on the backend passes and the
+   answer is still wrong, the free signal is exhausted: escalate the model or hand it to a
+   human. Never re-check in a loop.
+10. **A check declares its cost class** — no DB, metadata, optimizer, log query, reads data,
+    model call — so the ladder can order itself cheapest-first and the gate can meter it.
+    Check spend is attributed to **S**, never charged to the tool-loop budget it may share.
+
 On invariant 8: a cross-run horizon cannot help the stage that is failing now, so learning
 cannot be a rung even in principle. The relationship inverts — **leveling emits the training
 data; learning consumes it.** The leveling report already carries what a learning cycle wants
@@ -383,9 +517,9 @@ Derived from coupling risk, not from expected payoff.
 
 | # | Control | Why here | Blocked on |
 |---|---|---|---|
-| 1 | **C** — re-key retry on verdict class | Already stage-scoped and shipped; the only change is keying it on **V** instead of tier | Nothing |
-| 2 | **B2** — loop depth as a requestable currency | Measured as the most model-independent currency, and works on every model | Per-currency metering; a stage-scoped path that is not a second agent |
-| 3 | **V** — richer free verdict signals (plan-shape / EXPLAIN) | Free, post-flight, attacks the measured 83.3% ceiling; needs no effort plumbing at all | Nothing (independent of 1–2) |
+| 1 | **S** — the check ladder, rungs 2–4 (DDL, EXPLAIN, DBQL) | Free or near-free, attacks the one ceiling that was actually measured, needs no effort or model plumbing at all, and is the one mechanism that never failed to fire | An EXPLAIN plan parser; `Capabilities.Features` gating |
+| 2 | **C** — re-key retry on verdict class | Already stage-scoped and shipped; the only change is keying it on **V** instead of tier — and a richer **S** is what makes **V** worth keying on | Carrying **V** with the failure (cheap once 1 lands) |
+| 3 | **B2** — loop depth as a requestable currency | Measured as the most model-independent currency, and works on every model | Per-currency metering; a stage-scoped path that is not a second agent |
 | 4 | **X** — pre-flight complexity routing | The only thing that reaches failures no post-flight signal can see | Phase 0 below |
 | 5 | **B1** — in-model thinking | Highest coupling risk on every axis, untested mechanism, and unavailable on exactly the models this feature targets | Dead-knob resolution; optional capability interface; `SetProviderPool` gap |
 | — | **D** — learning | Stays downstream of the report, never a rung | — |
@@ -481,6 +615,30 @@ question set, not a feature.
 **Cost:** no LLM calls, no dollars, no Ollama, no new dependencies. Runnable on any machine that
 has the repo.
 
+### Companion experiment — can EXPLAIN see the silent failures?
+
+**S**'s central claim deserves the same treatment as **X**'s, and it is nearly as cheap.
+The claim is narrow and testable: *a plan-shape check would have flagged the wrong joins
+that the execution check could not see.*
+
+**Method.** Regenerate the Phase 5 synthetic schema (the generator in
+`leveling_sql_gen_test.go` is seed-pinned and parity-locked, so the database is
+reproducible), then run `EXPLAIN QUERY PLAN` over the generated SQL already recorded in
+`docs/experiments/sql_arms.jsonl` for the ladder arm. Score the plan-shape flag — a
+cartesian/product join, or a scan of a table the reference plan does not scan — against the
+recorded `silent_wrong` label. No model calls.
+
+**Rejection criteria, fixed before running.** The EXPLAIN rung is **rejected** unless the
+plan-shape flag catches at least **5 of the 7** silent-wrong queries while flagging no more
+than **1 in 3** of the 23 others. A flag that fires on most correct queries is not a signal,
+it is a tax.
+
+⚠️ Two limits to state with the result whatever it says. SQLite's `EXPLAIN QUERY PLAN` is
+far coarser than a Teradata plan — no cost estimates, no confidence levels, so this tests
+the *weakest possible* version of rung 3 and a negative result would not condemn the real
+one. And the wrong-arithmetic failures are invisible to any plan check by construction;
+only the wrong-join class is in scope.
+
 ## Deferred decisions
 
 Each one is deliberately open, and each is cheap to keep open under the invariants above.
@@ -503,6 +661,14 @@ Each one is deliberately open, and each is cheap to keep open under the invarian
 6. Whether learned artifacts are keyed by model or by task/domain. Default assumption:
    task/domain, with model recorded as a dimension.
 7. Effort granularity: per-stage, per-rung, or both.
+8. How deep the **default** check ladder should go. Rungs 1–3 are nearly free, but a default
+   that executes or verifies changes the cost profile of every stage that opts in.
+9. Whether a check that needs a tool call competes with the agent's tool budget, or gets its
+   own. Invariant 10 says its *spend* is attributed to **S**; where the call is *counted*
+   against a cap is still open.
+10. The preset names, and who owns them. `Draft` / `Contract` / `Audit` are placeholders.
+11. Whether `V` becomes a typed enum on the failure or stays free text. Keying **C** on it
+    cheaply probably requires the enum.
 
 ## Risks
 
@@ -570,6 +736,17 @@ prints every figure quoted in this document's
   originally-written bar (6 of 7 recovered, 0 of 23 false flags) but is leaky — derived from
   `reference_sql` — and collinear with template family, so its effective N is 5. The Phase 0
   method and rejection criteria were rewritten in response.
+- ✅ The check ladder's cheap rungs have primitives: `fabric.GetSchema` returns field name,
+  type, nullability and primary key (`pkg/fabric/interface.go:122-142`); `ExecuteQuery` can
+  carry an `EXPLAIN`; `Capabilities.Features` / `SupportedOperations`
+  (`pkg/fabric/interface.go:163-184`) is where a backend would advertise EXPLAIN or DBQL
+  reachability.
+- ⚠️ No EXPLAIN **plan parser** exists. `pkg/mcp/apps/html/explain-plan-visualizer.html` is
+  registered as an MCP UI resource (`pkg/mcp/apps/embedded.go:32,78`) with nothing in Go
+  producing plan data for it — a renderer, not a parser.
+- ⚠️ DBQL appears only as domain knowledge inside Teradata performance patterns
+  (`patterns/teradata/performance/`), for *analysing* a system. Nothing uses it to verify a
+  generated query.
 - ⚠️ No `leveling:` block appears in any shipped example workflow;
   `examples/reference/workflows/workflow-all-fields-reference.yaml` does not mention it. Worth
   fixing independently of this plan.
