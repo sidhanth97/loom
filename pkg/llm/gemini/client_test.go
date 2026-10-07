@@ -507,6 +507,82 @@ func TestConvertMessages_EmptyPartsSkipped(t *testing.T) {
 	}
 }
 
+func TestClient_ToolSchemaRequest(t *testing.T) {
+	const schemaJSON = `{"type":"object","description":"Task input","required":["tasks"],"properties":{
+		"tasks":{"type":"array","description":"Tasks to create","items":{
+			"type":"object","description":"A task","required":["idx","subject","details"],"properties":{
+				"idx":{"type":"integer","description":"1-based task number","minimum":0,"maximum":100},
+				"subject":{"type":"string","description":"Short task title","minLength":0,"maxLength":80,"format":"text","pattern":"^[A-Z]","enum":["Task"],"default":"Task"},
+				"details":{"type":"object","required":["active"],"properties":{"active":{"type":"boolean","default":false}}},
+				"nullable":{"anyOf":[{"type":"integer"},{"type":"null"}]},
+				"matrix":{"type":"array","items":{"type":"array","description":"Row","items":{"type":"string","description":"Cell","enum":["a","b"]}}}
+			}
+		}}
+	}}`
+	for _, mode := range []string{"chat", "stream"} {
+		t.Run(mode, func(t *testing.T) {
+			captured := make(chan map[string]interface{}, 1)
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var request map[string]interface{}
+				if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+					t.Error(err)
+					w.WriteHeader(http.StatusBadRequest)
+					return
+				}
+				captured <- request
+				const response = `{"candidates":[{"content":{"role":"model","parts":[{"text":"ok"}]},"finishReason":"STOP"}]}`
+				if mode == "stream" {
+					w.Header().Set("Content-Type", "text/event-stream")
+					_, _ = w.Write([]byte("data: " + response + "\n\n"))
+				} else {
+					w.Header().Set("Content-Type", "application/json")
+					_, _ = w.Write([]byte(response))
+				}
+			}))
+			defer server.Close()
+			schema, err := shuttle.FromJSON([]byte(schemaJSON))
+			require.NoError(t, err)
+			schema.Type = ""
+			schema.Properties["tasks"].Type = ""
+			schema.Properties["tasks"].Items.Type = ""
+			schema.Properties["tasks"].Items.Properties["subject"].Type = ""
+			schema.Properties["tasks"].Items.Properties["matrix"].Type = ""
+			schema.Properties["tasks"].Items.Properties["matrix"].Items.Type = ""
+			subject := schema.Properties["tasks"].Items.Properties["subject"]
+			subject.OneOf = []*shuttle.JSONSchema{{Type: "string"}}
+			subject.AllOf = []*shuttle.JSONSchema{{Type: "string"}}
+			subject.Not = &shuttle.JSONSchema{Type: "null"}
+			tool := &mockShuttleTool{name: "create_tasks", schema: schema}
+			client := NewClient(Config{APIKey: "test-key", Model: "gemini-3-flash-preview"})
+			client.httpClient.Transport = &mockTransport{baseURL: server.URL, original: server.Client().Transport}
+			messages := []types.Message{{Role: "user", Content: "Create tasks"}}
+			if mode == "stream" {
+				_, err = client.ChatStream(context.Background(), messages, []shuttle.Tool{tool}, nil)
+			} else {
+				_, err = client.Chat(context.Background(), messages, []shuttle.Tool{tool})
+			}
+			require.NoError(t, err)
+			request := <-captured
+			tools := request["tools"].([]interface{})
+			require.Len(t, tools, 1)
+			declarations := tools[0].(map[string]interface{})["functionDeclarations"].([]interface{})
+			require.Len(t, declarations, 1)
+			data, err := json.Marshal(declarations[0].(map[string]interface{})["parameters"])
+			require.NoError(t, err)
+			var expected map[string]interface{}
+			require.NoError(t, json.Unmarshal([]byte(schemaJSON), &expected))
+			properties := expected["properties"].(map[string]interface{})
+			item := properties["tasks"].(map[string]interface{})["items"].(map[string]interface{})
+			expectedSubject := item["properties"].(map[string]interface{})["subject"].(map[string]interface{})
+			expectedSubject["minLength"] = "0"
+			expectedSubject["maxLength"] = "80"
+			expectedJSON, err := json.Marshal(expected)
+			require.NoError(t, err)
+			assert.JSONEq(t, string(expectedJSON), string(data))
+		})
+	}
+}
+
 func TestThoughtSignature_RoundTrip(t *testing.T) {
 	// Simulates the full round-trip:
 	// 1. Gemini returns a function call with a thoughtSignature at Part level

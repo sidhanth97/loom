@@ -16,8 +16,13 @@ package bedrock
 import (
 	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/credentials"
+	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/teradata-labs/loom/pkg/shuttle"
@@ -234,7 +239,85 @@ func TestClient_ConvertTools(t *testing.T) {
 	assert.Equal(t, []string{"city"}, required)
 }
 
+func TestClient_ToolSchemaRequest(t *testing.T) {
+	const schemaJSON = `{"type":"object","description":"Task input","required":["tasks"],"allOf":[{"type":"object","properties":{}}],"properties":{
+		"tasks":{"type":"array","description":"Tasks to create","items":{
+			"type":"object","description":"A task","required":["idx","subject","details"],"properties":{
+				"idx":{"type":"integer","description":"1-based task number","minimum":0,"maximum":100},
+				"subject":{"type":"string","description":"Short task title","minLength":0,"maxLength":80,"pattern":"^[A-Z]","format":"text","enum":["Task"],"default":"Task"},
+				"details":{"type":"object","required":["active"],"properties":{"active":{"type":"boolean","default":false}}},
+				"matrix":{"type":"array","items":{"type":"array","items":{"type":"integer"}}},
+				"nullable":{"anyOf":[{"type":"integer"},{"type":"null"}]},
+				"choice":{"oneOf":[{"type":"string"},{"type":"number"}]},
+				"excluded":{"not":{"type":"null"}},
+				"empty":{"type":"object","properties":{}}
+			}
+		}}
+	}}`
+	for _, mode := range []string{"chat", "stream", "converse"} {
+		t.Run(mode, func(t *testing.T) {
+			captured := make(chan map[string]interface{}, 1)
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var request map[string]interface{}
+				if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+					t.Error(err)
+					w.WriteHeader(http.StatusBadRequest)
+					return
+				}
+				captured <- request
+				w.Header().Set("Content-Type", "application/json")
+				if mode == "converse" {
+					_, _ = w.Write([]byte(`{"output":{"message":{"role":"assistant","content":[{"text":"ok"}]}},"stopReason":"end_turn","usage":{"inputTokens":1,"outputTokens":1,"totalTokens":2},"metrics":{"latencyMs":1}}`))
+				} else {
+					_, _ = w.Write([]byte(`{"content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn"}`))
+				}
+			}))
+			defer server.Close()
+			schema, err := shuttle.FromJSON([]byte(schemaJSON))
+			require.NoError(t, err)
+			tool := &mockTool{name: "create_tasks", schema: schema}
+			client := &Client{
+				client: bedrockruntime.New(bedrockruntime.Options{
+					Region:       "us-east-1",
+					BaseEndpoint: aws.String(server.URL),
+					Credentials:  credentials.NewStaticCredentialsProvider("test-key", "test-secret", ""),
+					HTTPClient:   server.Client(),
+				}),
+				modelID:   DefaultBedrockModelID,
+				maxTokens: DefaultBedrockMaxTokens,
+			}
+			messages := []types.Message{{Role: "user", Content: "Create tasks"}}
+			switch mode {
+			case "stream":
+				_, err = client.ChatStream(context.Background(), messages, []shuttle.Tool{tool}, nil)
+			case "converse":
+				_, err = client.ChatConverse(context.Background(), messages, []shuttle.Tool{tool})
+			default:
+				_, err = client.Chat(context.Background(), messages, []shuttle.Tool{tool})
+			}
+			require.NoError(t, err)
+			request := <-captured
+			var inputSchema interface{}
+			if mode == "converse" {
+				config := request["toolConfig"].(map[string]interface{})
+				tools := config["tools"].([]interface{})
+				require.Len(t, tools, 1)
+				spec := tools[0].(map[string]interface{})["toolSpec"].(map[string]interface{})
+				inputSchema = spec["inputSchema"].(map[string]interface{})["json"]
+			} else {
+				tools := request["tools"].([]interface{})
+				require.Len(t, tools, 1)
+				inputSchema = tools[0].(map[string]interface{})["input_schema"]
+			}
+			data, err := json.Marshal(inputSchema)
+			require.NoError(t, err)
+			assert.JSONEq(t, schemaJSON, string(data))
+		})
+	}
+}
+
 func TestClient_ConvertSchemaProperties(t *testing.T) {
+	maxLength := 80
 	tests := []struct {
 		name     string
 		input    map[string]*shuttle.JSONSchema
@@ -272,8 +355,29 @@ func TestClient_ConvertSchemaProperties(t *testing.T) {
 				},
 			},
 		},
+		{
+			name: "array of objects with required fields and constraints",
+			input: map[string]*shuttle.JSONSchema{
+				"tasks": shuttle.NewArraySchema("Tasks", &shuttle.JSONSchema{
+					Type: "object", Description: "A task", Required: []string{"subject"},
+					Properties: map[string]*shuttle.JSONSchema{
+						"subject": {Type: "string", Description: "Title", MaxLength: &maxLength},
+					},
+				}),
+			},
+			expected: map[string]interface{}{
+				"tasks": map[string]interface{}{
+					"type": "array", "description": "Tasks",
+					"items": map[string]interface{}{
+						"type": "object", "description": "A task", "required": []string{"subject"},
+						"properties": map[string]interface{}{
+							"subject": map[string]interface{}{"type": "string", "description": "Title", "maxLength": 80},
+						},
+					},
+				},
+			},
+		},
 	}
-
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			result := convertSchemaProperties(tt.input)

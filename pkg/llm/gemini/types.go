@@ -76,12 +76,20 @@ type FunctionDeclaration struct {
 
 // Schema represents a JSON schema for function parameters.
 type Schema struct {
-	Type        string            `json:"type"`
+	Type        string            `json:"type,omitempty"`
 	Description string            `json:"description,omitempty"`
 	Properties  map[string]Schema `json:"properties,omitempty"`
 	Items       *Schema           `json:"items,omitempty"`
 	Enum        []interface{}     `json:"enum,omitempty"`
 	Required    []string          `json:"required,omitempty"`
+	Default     interface{}       `json:"default,omitempty"`
+	Format      string            `json:"format,omitempty"`
+	Pattern     string            `json:"pattern,omitempty"`
+	Minimum     *float64          `json:"minimum,omitempty"`
+	Maximum     *float64          `json:"maximum,omitempty"`
+	MinLength   *int              `json:"minLength,omitempty,string"`
+	MaxLength   *int              `json:"maxLength,omitempty,string"`
+	AnyOf       []Schema          `json:"anyOf,omitempty"`
 }
 
 // GenerationConfig controls generation behavior.
