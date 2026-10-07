@@ -19,6 +19,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"testing"
 
 	"github.com/teradata-labs/loom/pkg/observability"
@@ -515,6 +516,73 @@ data: {"type":"message_stop"}
 	// Verify stop reason
 	if resp.StopReason != "tool_use" {
 		t.Errorf("Expected stop_reason 'tool_use', got %q", resp.StopReason)
+	}
+}
+
+func TestClient_ToolSchemaRequest(t *testing.T) {
+	const schemaJSON = `{"type":"object","description":"Task input","required":["tasks"],"allOf":[{"type":"object","properties":{}}],"properties":{
+		"tasks":{"type":"array","description":"Tasks to create","items":{
+			"type":"object","description":"A task","required":["idx","subject","details"],"properties":{
+				"idx":{"type":"integer","description":"1-based task number","minimum":0,"maximum":100},
+				"subject":{"type":"string","description":"Short task title","minLength":0,"maxLength":80,"pattern":"^[A-Z]","format":"text","enum":["Task"],"default":"Task"},
+				"details":{"type":"object","required":["active"],"properties":{"active":{"type":"boolean","default":false}}},
+				"matrix":{"type":"array","items":{"type":"array","items":{"type":"integer"}}},
+				"nullable":{"anyOf":[{"type":"integer"},{"type":"null"}]},
+				"choice":{"oneOf":[{"type":"string"},{"type":"number"}]},
+				"excluded":{"not":{"type":"null"}},
+				"empty":{"type":"object","properties":{}}
+			}
+		}}
+	}}`
+	for _, mode := range []string{"chat", "stream"} {
+		t.Run(mode, func(t *testing.T) {
+			captured := make(chan map[string]interface{}, 1)
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var request map[string]interface{}
+				if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+					t.Error(err)
+					w.WriteHeader(http.StatusBadRequest)
+					return
+				}
+				captured <- request
+				if mode == "stream" {
+					w.Header().Set("Content-Type", "text/event-stream")
+					_, _ = w.Write([]byte("event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"))
+				} else {
+					w.Header().Set("Content-Type", "application/json")
+					_, _ = w.Write([]byte(`{"content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn"}`))
+				}
+			}))
+			defer server.Close()
+			schema, err := shuttle.FromJSON([]byte(schemaJSON))
+			if err != nil {
+				t.Fatal(err)
+			}
+			tool := &mockTool{name: "create_tasks", schema: schema}
+			client := NewClient(Config{APIKey: "test-key", Endpoint: server.URL})
+			messages := []types.Message{{Role: "user", Content: "Create tasks"}}
+			if mode == "stream" {
+				_, err = client.ChatStream(context.Background(), messages, []shuttle.Tool{tool}, nil)
+			} else {
+				_, err = client.Chat(context.Background(), messages, []shuttle.Tool{tool})
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			request := <-captured
+			tools, ok := request["tools"].([]interface{})
+			if !ok || len(tools) != 1 {
+				t.Fatalf("expected one tool, got %v", request["tools"])
+			}
+			var want map[string]interface{}
+			if err := json.Unmarshal([]byte(schemaJSON), &want); err != nil {
+				t.Fatal(err)
+			}
+			got := tools[0].(map[string]interface{})["input_schema"]
+			if !reflect.DeepEqual(want, got) {
+				t.Errorf("expected full nested schema, got %v", got)
+			}
+		})
 	}
 }
 

@@ -391,10 +391,13 @@ func (c *Client) convertTools(tools []shuttle.Tool) []CacheableTool {
 		// Convert JSONSchema to Anthropic's input schema format
 		schema := tool.InputSchema()
 		if schema != nil {
+			keywords := schema.ToMap()
+			schemaType, _ := keywords["type"].(string)
 			apiTool.InputSchema = InputSchema{
-				Type:       schema.Type,
+				Type:       schemaType,
 				Properties: c.convertSchemaProperties(schema.Properties),
 				Required:   schema.Required,
+				keywords:   keywords,
 			}
 		}
 
@@ -418,42 +421,7 @@ func (c *Client) convertSchemaProperties(props map[string]*shuttle.JSONSchema) m
 
 	result := make(map[string]map[string]interface{})
 	for key, schema := range props {
-		propMap := make(map[string]interface{})
-		propType := schema.Type
-		if propType == "" {
-			propType = "string" // MCP tools may omit type; default to string
-		}
-		propMap["type"] = propType
-
-		if schema.Description != "" {
-			propMap["description"] = schema.Description
-		}
-		if schema.Enum != nil {
-			propMap["enum"] = schema.Enum
-		}
-		if schema.Default != nil {
-			propMap["default"] = schema.Default
-		}
-		if schema.Properties != nil {
-			propMap["properties"] = c.convertSchemaProperties(schema.Properties)
-			if propType == "string" {
-				propMap["type"] = "object"
-			}
-		}
-		if schema.Items != nil {
-			itemType := schema.Items.Type
-			if itemType == "" {
-				itemType = "string"
-			}
-			propMap["items"] = map[string]interface{}{
-				"type": itemType,
-			}
-			if propType == "string" {
-				propMap["type"] = "array"
-			}
-		}
-
-		result[key] = propMap
+		result[key] = schema.ToMap()
 	}
 	return result
 }

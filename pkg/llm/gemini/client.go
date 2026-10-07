@@ -486,15 +486,7 @@ func convertTools(tools []shuttle.Tool, nameMap map[string]string) []FunctionDec
 
 		schema := tool.InputSchema()
 		if schema != nil {
-			params := Schema{
-				Type:       schema.Type,
-				Properties: convertSchemaProperties(schema.Properties),
-				Required:   schema.Required,
-			}
-			if params.Type == "" {
-				params.Type = "object"
-			}
-			decl.Parameters = params
+			decl.Parameters = convertSchema(schema)
 		}
 
 		declarations = append(declarations, decl)
@@ -510,41 +502,47 @@ func convertSchemaProperties(props map[string]*shuttle.JSONSchema) map[string]Sc
 
 	result := make(map[string]Schema)
 	for key, schema := range props {
-		propType := schema.Type
-		if propType == "" {
-			propType = "string" // Gemini requires a non-empty type for every property
-		}
-
-		s := Schema{
-			Type:        propType,
-			Description: schema.Description,
-			Enum:        schema.Enum,
-		}
-
-		if schema.Properties != nil {
-			s.Properties = convertSchemaProperties(schema.Properties)
-			if s.Type == "string" && len(s.Properties) > 0 {
-				s.Type = "object" // properties imply object type
-			}
-		}
-
-		if schema.Items != nil {
-			itemType := schema.Items.Type
-			if itemType == "" {
-				itemType = "string"
-			}
-			s.Items = &Schema{
-				Type:        itemType,
-				Description: schema.Items.Description,
-			}
-			if s.Type == "string" && s.Items != nil {
-				s.Type = "array" // items implies array type
-			}
-		}
-
-		result[key] = s
+		result[key] = convertSchema(schema)
 	}
 
+	return result
+}
+
+func convertSchema(schema *shuttle.JSONSchema) Schema {
+	if schema == nil {
+		return Schema{}
+	}
+	result := Schema{
+		Type:        schema.Type,
+		Description: schema.Description,
+		Properties:  convertSchemaProperties(schema.Properties),
+		Required:    schema.Required,
+		Enum:        schema.Enum,
+		Default:     schema.Default,
+		Format:      schema.Format,
+		Pattern:     schema.Pattern,
+		Minimum:     schema.Minimum,
+		Maximum:     schema.Maximum,
+		MinLength:   schema.MinLength,
+		MaxLength:   schema.MaxLength,
+	}
+	if result.Type == "" && len(schema.AnyOf) == 0 {
+		switch {
+		case schema.Properties != nil:
+			result.Type = "object"
+		case schema.Items != nil:
+			result.Type = "array"
+		default:
+			result.Type = "string"
+		}
+	}
+	if schema.Items != nil {
+		item := convertSchema(schema.Items)
+		result.Items = &item
+	}
+	for _, alternative := range schema.AnyOf {
+		result.AnyOf = append(result.AnyOf, convertSchema(alternative))
+	}
 	return result
 }
 

@@ -843,6 +843,61 @@ func TestClient_Chat_WithTools(t *testing.T) {
 	assert.Equal(t, "Boston", resp.ToolCalls[0].Input["location"])
 }
 
+func TestClient_ToolSchemaRequest(t *testing.T) {
+	const schemaJSON = `{"type":"object","description":"Task input","required":["tasks"],"allOf":[{"type":"object","properties":{}}],"properties":{
+		"tasks":{"type":"array","description":"Tasks to create","items":{
+			"type":"object","description":"A task","required":["idx","subject","details"],"properties":{
+				"idx":{"type":"integer","description":"1-based task number","minimum":0,"maximum":100},
+				"subject":{"type":"string","description":"Short task title","minLength":0,"maxLength":80,"pattern":"^[A-Z]","format":"text","enum":["Task"],"default":"Task"},
+				"details":{"type":"object","required":["active"],"properties":{"active":{"type":"boolean","default":false}}},
+				"matrix":{"type":"array","items":{"type":"array","items":{"type":"integer"}}},
+				"nullable":{"anyOf":[{"type":"integer"},{"type":"null"}]},
+				"choice":{"oneOf":[{"type":"string"},{"type":"number"}]},
+				"excluded":{"not":{"type":"null"}},
+				"empty":{"type":"object","properties":{}}
+			}
+		}}
+	}}`
+	for _, mode := range []string{"chat", "stream"} {
+		t.Run(mode, func(t *testing.T) {
+			captured := make(chan ChatCompletionRequest, 1)
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var request ChatCompletionRequest
+				if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+					t.Error(err)
+					w.WriteHeader(http.StatusBadRequest)
+					return
+				}
+				captured <- request
+				if mode == "stream" {
+					w.Header().Set("Content-Type", "text/event-stream")
+					_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n"))
+				} else {
+					w.Header().Set("Content-Type", "application/json")
+					_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`))
+				}
+			}))
+			defer server.Close()
+			schema, err := shuttle.FromJSON([]byte(schemaJSON))
+			require.NoError(t, err)
+			tool := &mockShuttleTool{name: "create_tasks", schema: schema}
+			client := NewClient(Config{APIKey: "test-key", Endpoint: server.URL, Model: "gpt-4o"})
+			messages := []types.Message{{Role: "user", Content: "Create tasks"}}
+			if mode == "stream" {
+				_, err = client.ChatStream(context.Background(), messages, []shuttle.Tool{tool}, nil)
+			} else {
+				_, err = client.Chat(context.Background(), messages, []shuttle.Tool{tool})
+			}
+			require.NoError(t, err)
+			request := <-captured
+			require.Len(t, request.Tools, 1)
+			data, err := json.Marshal(request.Tools[0].Function.Parameters)
+			require.NoError(t, err)
+			assert.JSONEq(t, schemaJSON, string(data))
+		})
+	}
+}
+
 func TestClient_Chat_APIError(t *testing.T) {
 	// Mock server returning error
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

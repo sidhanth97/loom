@@ -16,6 +16,7 @@ package shuttle
 import (
 	"context"
 	"encoding/json"
+	"reflect"
 	"testing"
 )
 
@@ -181,6 +182,79 @@ func TestJSONSchema_ToJSON(t *testing.T) {
 
 	if result["type"] != "object" {
 		t.Error("Expected type 'object' in JSON")
+	}
+}
+
+func TestJSONSchema_ToMap(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{
+			name: "nested keywords",
+			input: `{"type":"object","description":"Task input","required":["tasks"],"properties":{
+				"tasks":{"type":"array","description":"Tasks to create","items":{
+					"type":"object","description":"A task","required":["idx","subject","details"],"properties":{
+						"idx":{"type":"integer","description":"1-based task number","minimum":0,"maximum":100},
+						"subject":{"type":"string","description":"Short task title","minLength":0,"maxLength":80,"pattern":"^[A-Z]","format":"text","enum":["Task"],"default":"Task"},
+						"details":{"type":"object","required":["active"],"properties":{"active":{"type":"boolean","default":false}}},
+						"empty":{"type":"object","properties":{}},
+						"matrix":{"type":"array","items":{"type":"array","items":{"type":"integer"}}},
+						"nullable":{"anyOf":[{"type":"integer"},{"type":"null"}]},
+						"choice":{"oneOf":[{"type":"string"},{"type":"number"}]},
+						"combined":{"allOf":[{"type":"string","minLength":1},{"not":{"type":"null"}}]},
+						"excluded":{"not":{"type":"string"}},
+						"explicit":{"type":"integer","anyOf":[{"type":"integer","minimum":1}]}
+					}
+				}}
+			}}`,
+		},
+		{name: "empty object", input: `{"type":"object"}`, want: `{"type":"object","properties":{}}`},
+		{name: "infer object", input: `{"properties":{"name":{"description":"Name"}}}`, want: `{"type":"object","properties":{"name":{"type":"string","description":"Name"}}}`},
+		{name: "infer empty object", input: `{"properties":{}}`, want: `{"type":"object","properties":{}}`},
+		{name: "infer array", input: `{"items":{"items":{"type":"integer"}}}`, want: `{"type":"array","items":{"type":"array","items":{"type":"integer"}}}`},
+		{name: "infer string", input: `{}`, want: `{"type":"string"}`},
+		{name: "composite with properties", input: `{"anyOf":[{"type":"null"}],"properties":{}}`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			schema, err := FromJSON([]byte(test.input))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if test.want == "" {
+				test.want = test.input
+			}
+			var want interface{}
+			if err := json.Unmarshal([]byte(test.want), &want); err != nil {
+				t.Fatal(err)
+			}
+			for name, value := range map[string]interface{}{"map": schema.ToMap(), "marshal": schema} {
+				data, err := json.Marshal(value)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var got interface{}
+				if err := json.Unmarshal(data, &got); err != nil {
+					t.Fatal(err)
+				}
+				if !reflect.DeepEqual(want, got) {
+					t.Errorf("%s: want %s, got %s", name, test.want, data)
+				}
+				parsed, err := FromJSON(data)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !reflect.DeepEqual(schema.ToMap(), parsed.ToMap()) {
+					t.Errorf("%s: schema changed after round-trip", name)
+				}
+			}
+		})
+	}
+	var schema *JSONSchema
+	if schema.ToMap() != nil {
+		t.Error("nil schema must serialize to nil")
 	}
 }
 

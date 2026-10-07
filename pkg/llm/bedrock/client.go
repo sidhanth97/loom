@@ -652,17 +652,7 @@ func (c *Client) convertTools(tools []shuttle.Tool) []map[string]interface{} {
 
 		schema := tool.InputSchema()
 		if schema != nil {
-			// Ensure type field is not empty (default to "object")
-			schemaType := schema.Type
-			if schemaType == "" {
-				schemaType = "object"
-			}
-
-			apiTool["input_schema"] = map[string]interface{}{
-				"type":       schemaType,
-				"properties": convertSchemaProperties(schema.Properties),
-				"required":   schema.Required,
-			}
+			apiTool["input_schema"] = schema.ToMap()
 		}
 
 		apiTools = append(apiTools, apiTool)
@@ -679,63 +669,9 @@ func convertSchemaProperties(props map[string]*shuttle.JSONSchema) map[string]in
 
 	result := make(map[string]interface{})
 	for key, schema := range props {
-		propMap := make(map[string]interface{})
-		propType := schema.Type
-		if propType == "" {
-			propType = "string" // MCP tools may omit type; default to string
-		}
-		propMap["type"] = propType
-
-		if schema.Description != "" {
-			propMap["description"] = schema.Description
-		}
-		if schema.Enum != nil {
-			propMap["enum"] = schema.Enum
-		}
-		if schema.Default != nil {
-			propMap["default"] = schema.Default
-		}
-		if schema.Properties != nil {
-			propMap["properties"] = convertSchemaProperties(schema.Properties)
-			if propType == "string" {
-				propMap["type"] = "object"
-			}
-		}
-		if schema.Items != nil {
-			propMap["items"] = convertSchemaItem(schema.Items)
-			if propType == "string" {
-				propMap["type"] = "array"
-			}
-		}
-
-		result[key] = propMap
+		result[key] = schema.ToMap()
 	}
 	return result
-}
-
-// convertSchemaItem converts a JSONSchema item for arrays.
-func convertSchemaItem(item *shuttle.JSONSchema) map[string]interface{} {
-	itemMap := make(map[string]interface{})
-	itemType := item.Type
-	if itemType == "" {
-		itemType = "string" // MCP tools may omit type; default to string
-	}
-	itemMap["type"] = itemType
-
-	if item.Description != "" {
-		itemMap["description"] = item.Description
-	}
-	if item.Enum != nil {
-		itemMap["enum"] = item.Enum
-	}
-	if item.Properties != nil {
-		itemMap["properties"] = convertSchemaProperties(item.Properties)
-		if itemType == "string" {
-			itemMap["type"] = "object"
-		}
-	}
-
-	return itemMap
 }
 
 // convertResponse converts Bedrock response to agent format.

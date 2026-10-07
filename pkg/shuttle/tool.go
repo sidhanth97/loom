@@ -128,76 +128,90 @@ type JSONSchema struct {
 	Not   *JSONSchema   `json:"not,omitempty"`
 }
 
-// MarshalJSON implements custom JSON marshaling to ensure Bedrock compliance.
-// Object types must have "properties": {} (not omitted) per JSON Schema 2020-12.
-func (s *JSONSchema) MarshalJSON() ([]byte, error) {
-	// Create an alias to avoid infinite recursion
-	type Alias JSONSchema
-
-	// For object types with nil/empty properties, we need to ensure
-	// the properties field is present as {} in the JSON output
-	if s.Type == "object" && len(s.Properties) == 0 {
-		// Build JSON manually to force empty object for properties
-		result := make(map[string]interface{})
-		result["type"] = s.Type
-
-		if s.Description != "" {
-			result["description"] = s.Description
-		}
-
-		// Force properties to be {} not omitted
-		result["properties"] = make(map[string]*JSONSchema)
-
-		if len(s.Required) > 0 {
-			result["required"] = s.Required
-		}
-
-		// Include other optional fields if present
-		if s.Items != nil {
-			result["items"] = s.Items
-		}
-		if len(s.Enum) > 0 {
-			result["enum"] = s.Enum
-		}
-		if s.Default != nil {
-			result["default"] = s.Default
-		}
-		if s.Format != "" {
-			result["format"] = s.Format
-		}
-		if s.Pattern != "" {
-			result["pattern"] = s.Pattern
-		}
-		if s.Minimum != nil {
-			result["minimum"] = s.Minimum
-		}
-		if s.Maximum != nil {
-			result["maximum"] = s.Maximum
-		}
-		if s.MinLength != nil {
-			result["minLength"] = s.MinLength
-		}
-		if s.MaxLength != nil {
-			result["maxLength"] = s.MaxLength
-		}
-		if len(s.AnyOf) > 0 {
-			result["anyOf"] = s.AnyOf
-		}
-		if len(s.OneOf) > 0 {
-			result["oneOf"] = s.OneOf
-		}
-		if len(s.AllOf) > 0 {
-			result["allOf"] = s.AllOf
-		}
-		if s.Not != nil {
-			result["not"] = s.Not
-		}
-
-		return json.Marshal(result)
+// ToMap recursively serializes every supported JSON Schema keyword.
+// Missing types are inferred unless a composite keyword defines the schema.
+func (s *JSONSchema) ToMap() map[string]interface{} {
+	if s == nil {
+		return nil
 	}
 
-	// For all other cases, use default marshaling
-	return json.Marshal((*Alias)(s))
+	result := make(map[string]interface{})
+	schemaType := s.Type
+	if schemaType == "" && len(s.AnyOf) == 0 && len(s.OneOf) == 0 && len(s.AllOf) == 0 && s.Not == nil {
+		switch {
+		case s.Properties != nil:
+			schemaType = "object"
+		case s.Items != nil:
+			schemaType = "array"
+		default:
+			schemaType = "string"
+		}
+	}
+	if schemaType != "" {
+		result["type"] = schemaType
+	}
+	if s.Description != "" {
+		result["description"] = s.Description
+	}
+	if s.Properties != nil || schemaType == "object" {
+		properties := make(map[string]interface{}, len(s.Properties))
+		for name, property := range s.Properties {
+			properties[name] = property.ToMap()
+		}
+		result["properties"] = properties
+	}
+	if len(s.Required) > 0 {
+		result["required"] = s.Required
+	}
+	if s.Items != nil {
+		result["items"] = s.Items.ToMap()
+	}
+	if len(s.Enum) > 0 {
+		result["enum"] = s.Enum
+	}
+	if s.Default != nil {
+		result["default"] = s.Default
+	}
+	if s.Format != "" {
+		result["format"] = s.Format
+	}
+	if s.Pattern != "" {
+		result["pattern"] = s.Pattern
+	}
+	if s.Minimum != nil {
+		result["minimum"] = *s.Minimum
+	}
+	if s.Maximum != nil {
+		result["maximum"] = *s.Maximum
+	}
+	if s.MinLength != nil {
+		result["minLength"] = *s.MinLength
+	}
+	if s.MaxLength != nil {
+		result["maxLength"] = *s.MaxLength
+	}
+	for keyword, schemas := range map[string][]*JSONSchema{
+		"anyOf": s.AnyOf,
+		"oneOf": s.OneOf,
+		"allOf": s.AllOf,
+	} {
+		if len(schemas) > 0 {
+			alternatives := make([]map[string]interface{}, len(schemas))
+			for index, schema := range schemas {
+				alternatives[index] = schema.ToMap()
+			}
+			result[keyword] = alternatives
+		}
+	}
+	if s.Not != nil {
+		result["not"] = s.Not.ToMap()
+	}
+	return result
+}
+
+// MarshalJSON preserves nested schemas and emits empty object properties for Bedrock.
+func (s *JSONSchema) MarshalJSON() ([]byte, error) {
+	return json.Marshal(s.ToMap())
 }
 
 // ToJSON converts the schema to JSON bytes.
