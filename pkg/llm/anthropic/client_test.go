@@ -267,6 +267,105 @@ func TestClient_ConvertMessages_SkillBodySidecarCoalesces(t *testing.T) {
 	}
 }
 
+func TestInputSchema_MarshalJSON(t *testing.T) {
+	tests := []struct {
+		name   string
+		schema InputSchema
+		want   string
+	}{
+		{
+			name: "legacy public fields without keyword map",
+			schema: InputSchema{
+				Type: "object",
+				Properties: map[string]map[string]interface{}{
+					"name": {"type": "string", "description": "Name"},
+				},
+				Required: []string{"name"},
+			},
+			want: `{"type":"object","properties":{"name":{"type":"string","description":"Name"}},"required":["name"]}`,
+		},
+		{
+			name: "nil object properties become empty object",
+			schema: InputSchema{
+				Type:     "object",
+				keywords: map[string]interface{}{"type": "object", "description": "Metadata"},
+			},
+			want: `{"type":"object","description":"Metadata","properties":{}}`,
+		},
+		{
+			name: "explicit empty properties replace stale properties",
+			schema: InputSchema{
+				Type:       "object",
+				Properties: map[string]map[string]interface{}{},
+				keywords: map[string]interface{}{
+					"type":       "object",
+					"properties": map[string]interface{}{"old": map[string]interface{}{"type": "string"}},
+					"required":   []string{"old"},
+				},
+			},
+			want: `{"type":"object","properties":{}}`,
+		},
+		{
+			name: "clearing public fields retains only composite keywords",
+			schema: InputSchema{
+				keywords: map[string]interface{}{
+					"type":       "integer",
+					"properties": map[string]interface{}{},
+					"required":   []string{"old"},
+					"anyOf":      []map[string]interface{}{{"type": "integer"}, {"type": "null"}},
+				},
+			},
+			want: `{"anyOf":[{"type":"integer"},{"type":"null"}]}`,
+		},
+		{
+			name: "public fields override keywords while preserving description",
+			schema: InputSchema{
+				Type: "object",
+				Properties: map[string]map[string]interface{}{
+					"name": {"type": "string"},
+				},
+				Required: []string{"name"},
+				keywords: map[string]interface{}{
+					"type":        "array",
+					"properties":  map[string]interface{}{"old": map[string]interface{}{"type": "integer"}},
+					"required":    []string{"old"},
+					"description": "Input",
+				},
+			},
+			want: `{"type":"object","description":"Input","properties":{"name":{"type":"string"}},"required":["name"]}`,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			before, err := json.Marshal(test.schema.keywords)
+			if err != nil {
+				t.Fatal(err)
+			}
+			data, err := json.Marshal(test.schema)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var got, want map[string]interface{}
+			if err := json.Unmarshal(data, &got); err != nil {
+				t.Fatal(err)
+			}
+			if err := json.Unmarshal([]byte(test.want), &want); err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(want, got) {
+				t.Errorf("want %s, got %s", test.want, data)
+			}
+			after, err := json.Marshal(test.schema.keywords)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(before) != string(after) {
+				t.Errorf("marshaling mutated source keywords: before %s, after %s", before, after)
+			}
+		})
+	}
+}
+
 func TestContentBlock_MarshalJSON_ToolUseAlwaysHasInput(t *testing.T) {
 	// Anthropic API requires tool_use blocks to always have "input" present.
 	// Even when the LLM returns a tool call with no arguments, the serialized
@@ -558,29 +657,46 @@ func TestClient_ToolSchemaRequest(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			tool := &mockTool{name: "create_tasks", schema: schema}
+			inputTools := []shuttle.Tool{
+				&mockTool{name: "create_tasks", schema: schema},
+				&mockTool{name: "no_arguments", schema: &shuttle.JSONSchema{}},
+				&mockTool{name: "description_only", schema: &shuttle.JSONSchema{Description: "No arguments"}},
+			}
 			client := NewClient(Config{APIKey: "test-key", Endpoint: server.URL})
 			messages := []types.Message{{Role: "user", Content: "Create tasks"}}
 			if mode == "stream" {
-				_, err = client.ChatStream(context.Background(), messages, []shuttle.Tool{tool}, nil)
+				_, err = client.ChatStream(context.Background(), messages, inputTools, nil)
 			} else {
-				_, err = client.Chat(context.Background(), messages, []shuttle.Tool{tool})
+				_, err = client.Chat(context.Background(), messages, inputTools)
 			}
 			if err != nil {
 				t.Fatal(err)
 			}
 			request := <-captured
 			tools, ok := request["tools"].([]interface{})
-			if !ok || len(tools) != 1 {
-				t.Fatalf("expected one tool, got %v", request["tools"])
+			if !ok || len(tools) != 3 {
+				t.Fatalf("expected three tools, got %v", request["tools"])
 			}
 			var want map[string]interface{}
 			if err := json.Unmarshal([]byte(schemaJSON), &want); err != nil {
 				t.Fatal(err)
 			}
+			delete(want, "allOf")
 			got := tools[0].(map[string]interface{})["input_schema"]
 			if !reflect.DeepEqual(want, got) {
 				t.Errorf("expected full nested schema, got %v", got)
+			}
+			for index := 1; index < len(tools); index++ {
+				expected := map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}
+				if index == 2 {
+					expected["description"] = "No arguments"
+				}
+				if !reflect.DeepEqual(expected, tools[index].(map[string]interface{})["input_schema"]) {
+					t.Errorf("unexpected no-argument schema: %v", tools[index])
+				}
+				if inputTools[index].InputSchema().Type != "" {
+					t.Error("serialization mutated the root schema type")
+				}
 			}
 		})
 	}

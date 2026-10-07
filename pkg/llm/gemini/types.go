@@ -75,6 +75,7 @@ type FunctionDeclaration struct {
 }
 
 // Schema represents a JSON schema for function parameters.
+// Gemini uses uppercase type enums and protobuf JSON strings for length bounds.
 type Schema struct {
 	Type        string            `json:"type,omitempty"`
 	Description string            `json:"description,omitempty"`

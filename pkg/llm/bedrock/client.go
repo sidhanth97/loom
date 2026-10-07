@@ -652,7 +652,7 @@ func (c *Client) convertTools(tools []shuttle.Tool) []map[string]interface{} {
 
 		schema := tool.InputSchema()
 		if schema != nil {
-			apiTool["input_schema"] = schema.ToMap()
+			apiTool["input_schema"] = llm.NormalizeObjectToolSchema(schema)
 		}
 
 		apiTools = append(apiTools, apiTool)

@@ -275,7 +275,11 @@ func TestClient_ToolSchemaRequest(t *testing.T) {
 			defer server.Close()
 			schema, err := shuttle.FromJSON([]byte(schemaJSON))
 			require.NoError(t, err)
-			tool := &mockTool{name: "create_tasks", schema: schema}
+			inputTools := []shuttle.Tool{
+				&mockTool{name: "create_tasks", schema: schema},
+				&mockTool{name: "no_arguments", schema: &shuttle.JSONSchema{}},
+				&mockTool{name: "description_only", schema: &shuttle.JSONSchema{Description: "No arguments"}},
+			}
 			client := &Client{
 				client: bedrockruntime.New(bedrockruntime.Options{
 					Region:       "us-east-1",
@@ -289,29 +293,46 @@ func TestClient_ToolSchemaRequest(t *testing.T) {
 			messages := []types.Message{{Role: "user", Content: "Create tasks"}}
 			switch mode {
 			case "stream":
-				_, err = client.ChatStream(context.Background(), messages, []shuttle.Tool{tool}, nil)
+				_, err = client.ChatStream(context.Background(), messages, inputTools, nil)
 			case "converse":
-				_, err = client.ChatConverse(context.Background(), messages, []shuttle.Tool{tool})
+				_, err = client.ChatConverse(context.Background(), messages, inputTools)
 			default:
-				_, err = client.Chat(context.Background(), messages, []shuttle.Tool{tool})
+				_, err = client.Chat(context.Background(), messages, inputTools)
 			}
 			require.NoError(t, err)
 			request := <-captured
 			var inputSchema interface{}
+			var noArgumentSchemas []interface{}
 			if mode == "converse" {
 				config := request["toolConfig"].(map[string]interface{})
 				tools := config["tools"].([]interface{})
-				require.Len(t, tools, 1)
+				require.Len(t, tools, 3)
 				spec := tools[0].(map[string]interface{})["toolSpec"].(map[string]interface{})
 				inputSchema = spec["inputSchema"].(map[string]interface{})["json"]
+				for _, tool := range tools[1:] {
+					spec := tool.(map[string]interface{})["toolSpec"].(map[string]interface{})
+					noArgumentSchemas = append(noArgumentSchemas, spec["inputSchema"].(map[string]interface{})["json"])
+				}
 			} else {
 				tools := request["tools"].([]interface{})
-				require.Len(t, tools, 1)
+				require.Len(t, tools, 3)
 				inputSchema = tools[0].(map[string]interface{})["input_schema"]
+				for _, tool := range tools[1:] {
+					noArgumentSchemas = append(noArgumentSchemas, tool.(map[string]interface{})["input_schema"])
+				}
 			}
 			data, err := json.Marshal(inputSchema)
 			require.NoError(t, err)
-			assert.JSONEq(t, schemaJSON, string(data))
+			var expected map[string]interface{}
+			require.NoError(t, json.Unmarshal([]byte(schemaJSON), &expected))
+			delete(expected, "allOf")
+			expectedJSON, err := json.Marshal(expected)
+			require.NoError(t, err)
+			assert.JSONEq(t, string(expectedJSON), string(data))
+			assert.Equal(t, map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}, noArgumentSchemas[0])
+			assert.Equal(t, map[string]interface{}{"type": "object", "properties": map[string]interface{}{}, "description": "No arguments"}, noArgumentSchemas[1])
+			assert.Empty(t, inputTools[1].InputSchema().Type)
+			assert.Empty(t, inputTools[2].InputSchema().Type)
 		})
 	}
 }

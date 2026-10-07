@@ -391,12 +391,17 @@ func (c *Client) convertTools(tools []shuttle.Tool) []CacheableTool {
 		// Convert JSONSchema to Anthropic's input schema format
 		schema := tool.InputSchema()
 		if schema != nil {
-			keywords := schema.ToMap()
+			keywords := llm.NormalizeObjectToolSchema(schema)
 			schemaType, _ := keywords["type"].(string)
+			properties := make(map[string]map[string]interface{})
+			for name, property := range keywords["properties"].(map[string]interface{}) {
+				properties[name], _ = property.(map[string]interface{})
+			}
+			required, _ := keywords["required"].([]string)
 			apiTool.InputSchema = InputSchema{
 				Type:       schemaType,
-				Properties: c.convertSchemaProperties(schema.Properties),
-				Required:   schema.Required,
+				Properties: properties,
+				Required:   required,
 				keywords:   keywords,
 			}
 		}
@@ -411,19 +416,6 @@ func (c *Client) convertTools(tools []shuttle.Tool) []CacheableTool {
 	}
 
 	return apiTools
-}
-
-// convertSchemaProperties converts JSONSchema properties to Anthropic format.
-func (c *Client) convertSchemaProperties(props map[string]*shuttle.JSONSchema) map[string]map[string]interface{} {
-	if props == nil {
-		return nil
-	}
-
-	result := make(map[string]map[string]interface{})
-	for key, schema := range props {
-		result[key] = schema.ToMap()
-	}
-	return result
 }
 
 // convertResponse converts Anthropic response to agent format.

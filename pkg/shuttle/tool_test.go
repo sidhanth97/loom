@@ -230,31 +230,121 @@ func TestJSONSchema_ToMap(t *testing.T) {
 			if err := json.Unmarshal([]byte(test.want), &want); err != nil {
 				t.Fatal(err)
 			}
-			for name, value := range map[string]interface{}{"map": schema.ToMap(), "marshal": schema} {
-				data, err := json.Marshal(value)
-				if err != nil {
-					t.Fatal(err)
-				}
-				var got interface{}
-				if err := json.Unmarshal(data, &got); err != nil {
-					t.Fatal(err)
-				}
-				if !reflect.DeepEqual(want, got) {
-					t.Errorf("%s: want %s, got %s", name, test.want, data)
-				}
-				parsed, err := FromJSON(data)
-				if err != nil {
-					t.Fatal(err)
-				}
-				if !reflect.DeepEqual(schema.ToMap(), parsed.ToMap()) {
-					t.Errorf("%s: schema changed after round-trip", name)
-				}
+			data, err := json.Marshal(schema.ToMap())
+			if err != nil {
+				t.Fatal(err)
+			}
+			var got interface{}
+			if err := json.Unmarshal(data, &got); err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(want, got) {
+				t.Errorf("want %s, got %s", test.want, data)
+			}
+			parsed, err := FromJSON(data)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(schema.ToMap(), parsed.ToMap()) {
+				t.Error("schema changed after round-trip")
 			}
 		})
 	}
 	var schema *JSONSchema
 	if schema.ToMap() != nil {
 		t.Error("nil schema must serialize to nil")
+	}
+}
+
+func TestJSONSchema_MarshalJSONPreservesTypes(t *testing.T) {
+	tests := []struct {
+		name   string
+		schema *JSONSchema
+		want   string
+	}{
+		{name: "empty", schema: &JSONSchema{}, want: `{"type":""}`},
+		{name: "description only", schema: &JSONSchema{Description: "Any value"}, want: `{"type":"","description":"Any value"}`},
+		{name: "empty object", schema: &JSONSchema{Type: "object"}, want: `{"type":"object","properties":{}}`},
+		{
+			name: "untyped nested property",
+			schema: &JSONSchema{
+				Type: "object", Properties: map[string]*JSONSchema{"value": {}},
+			},
+			want: `{"type":"object","properties":{"value":{"type":""}}}`,
+		},
+		{
+			name: "untyped array item",
+			schema: &JSONSchema{
+				Type: "array", Items: &JSONSchema{},
+			},
+			want: `{"type":"array","items":{"type":""}}`,
+		},
+		{
+			name: "nullable composite",
+			schema: &JSONSchema{
+				AnyOf: []*JSONSchema{{Type: "integer"}, {Type: "null"}},
+			},
+			want: `{"type":"","anyOf":[{"type":"integer"},{"type":"null"}]}`,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			data, err := json.Marshal(test.schema)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var got, want interface{}
+			if err := json.Unmarshal(data, &got); err != nil {
+				t.Fatal(err)
+			}
+			if err := json.Unmarshal([]byte(test.want), &want); err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(want, got) {
+				t.Errorf("want %s, got %s", test.want, data)
+			}
+		})
+	}
+}
+
+func TestJSONSchema_ToMapDoesNotAliasSlices(t *testing.T) {
+	schema := &JSONSchema{Type: "object", Required: []string{"name"}, Enum: []interface{}{"value"}}
+	result := schema.ToMap()
+	result["required"].([]string)[0] = "changed"
+	result["enum"].([]interface{})[0] = "changed"
+	if schema.Required[0] != "name" || schema.Enum[0] != "value" {
+		t.Error("changing the returned slices mutated the schema")
+	}
+}
+
+func TestJSONSchema_ToToolMap(t *testing.T) {
+	for _, schema := range []*JSONSchema{
+		{},
+		{Description: "No arguments"},
+		{Properties: map[string]*JSONSchema{}},
+		{AnyOf: []*JSONSchema{{Type: "object"}}},
+		{OneOf: []*JSONSchema{{Type: "object"}}},
+		{AllOf: []*JSONSchema{{Type: "object"}}},
+		{Not: &JSONSchema{Type: "null"}},
+	} {
+		got := schema.ToToolMap()
+		if got["type"] != "object" {
+			t.Errorf("tool root must default to object, got %v", got)
+		}
+		properties, ok := got["properties"].(map[string]interface{})
+		if !ok || properties == nil || len(properties) != 0 {
+			t.Errorf("empty object must have empty properties, got %v", got)
+		}
+		if schema.Type != "" {
+			t.Error("serialization mutated the root schema type")
+		}
+		if schema.Description != "" && got["description"] != schema.Description {
+			t.Error("serialization dropped the root description")
+		}
+	}
+	var schema *JSONSchema
+	if schema.ToToolMap() != nil {
+		t.Error("nil tool schema must serialize to nil")
 	}
 }
 

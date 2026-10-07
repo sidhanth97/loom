@@ -452,11 +452,7 @@ func (c *SDKClient) convertToolsToSDK(tools []shuttle.Tool) ([]anthropic.ToolPar
 		schema := tool.InputSchema()
 		if schema != nil {
 			// Marshal and unmarshal to get proper anthropic.ToolInputSchemaParam
-			schemaMap := map[string]interface{}{
-				"type":       schema.Type,
-				"properties": schema.Properties,
-				"required":   schema.Required,
-			}
+			schemaMap := llm.NormalizeObjectToolSchema(schema)
 			schemaJSON, _ := json.Marshal(schemaMap)
 			var inputSchema anthropic.ToolInputSchemaParam
 			_ = json.Unmarshal(schemaJSON, &inputSchema)

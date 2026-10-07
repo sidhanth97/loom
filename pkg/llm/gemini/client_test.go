@@ -507,15 +507,31 @@ func TestConvertMessages_EmptyPartsSkipped(t *testing.T) {
 	}
 }
 
+func TestConvertSchema_NilSchemas(t *testing.T) {
+	t.Run("nil schema", func(t *testing.T) {
+		assert.Equal(t, Schema{}, convertSchema(nil))
+	})
+	t.Run("nil nested property", func(t *testing.T) {
+		schema := &shuttle.JSONSchema{
+			Type:       "object",
+			Properties: map[string]*shuttle.JSONSchema{"optional": nil},
+		}
+		assert.Equal(t, Schema{
+			Type:       "OBJECT",
+			Properties: map[string]Schema{"optional": {}},
+		}, convertSchema(schema))
+	})
+}
+
 func TestClient_ToolSchemaRequest(t *testing.T) {
-	const schemaJSON = `{"type":"object","description":"Task input","required":["tasks"],"properties":{
-		"tasks":{"type":"array","description":"Tasks to create","items":{
-			"type":"object","description":"A task","required":["idx","subject","details"],"properties":{
-				"idx":{"type":"integer","description":"1-based task number","minimum":0,"maximum":100},
-				"subject":{"type":"string","description":"Short task title","minLength":0,"maxLength":80,"format":"text","pattern":"^[A-Z]","enum":["Task"],"default":"Task"},
-				"details":{"type":"object","required":["active"],"properties":{"active":{"type":"boolean","default":false}}},
-				"nullable":{"anyOf":[{"type":"integer"},{"type":"null"}]},
-				"matrix":{"type":"array","items":{"type":"array","description":"Row","items":{"type":"string","description":"Cell","enum":["a","b"]}}}
+	const schemaJSON = `{"type":"OBJECT","description":"Task input","required":["tasks"],"properties":{
+		"tasks":{"type":"ARRAY","description":"Tasks to create","items":{
+			"type":"OBJECT","description":"A task","required":["idx","subject","details"],"properties":{
+				"idx":{"type":"INTEGER","description":"1-based task number","minimum":0,"maximum":100},
+				"subject":{"type":"STRING","description":"Short task title","minLength":0,"maxLength":80,"format":"text","pattern":"^[A-Z]","enum":["Task"],"default":"Task"},
+				"details":{"type":"OBJECT","required":["active"],"properties":{"active":{"type":"BOOLEAN","default":false}}},
+				"nullable":{"anyOf":[{"type":"INTEGER"},{"type":"NULL"}]},
+				"matrix":{"type":"ARRAY","items":{"type":"ARRAY","description":"Row","items":{"type":"STRING","description":"Cell","enum":["a","b"]}}}
 			}
 		}}
 	}}`
@@ -548,25 +564,30 @@ func TestClient_ToolSchemaRequest(t *testing.T) {
 			schema.Properties["tasks"].Items.Properties["subject"].Type = ""
 			schema.Properties["tasks"].Items.Properties["matrix"].Type = ""
 			schema.Properties["tasks"].Items.Properties["matrix"].Items.Type = ""
+			schema.Properties["tasks"].Items.Properties["nullable"].AnyOf[1].Type = "null"
 			subject := schema.Properties["tasks"].Items.Properties["subject"]
 			subject.OneOf = []*shuttle.JSONSchema{{Type: "string"}}
 			subject.AllOf = []*shuttle.JSONSchema{{Type: "string"}}
 			subject.Not = &shuttle.JSONSchema{Type: "null"}
-			tool := &mockShuttleTool{name: "create_tasks", schema: schema}
+			inputTools := []shuttle.Tool{
+				&mockShuttleTool{name: "create_tasks", schema: schema},
+				&mockShuttleTool{name: "no_arguments", schema: &shuttle.JSONSchema{}},
+				&mockShuttleTool{name: "description_only", schema: &shuttle.JSONSchema{Description: "No arguments"}},
+			}
 			client := NewClient(Config{APIKey: "test-key", Model: "gemini-3-flash-preview"})
 			client.httpClient.Transport = &mockTransport{baseURL: server.URL, original: server.Client().Transport}
 			messages := []types.Message{{Role: "user", Content: "Create tasks"}}
 			if mode == "stream" {
-				_, err = client.ChatStream(context.Background(), messages, []shuttle.Tool{tool}, nil)
+				_, err = client.ChatStream(context.Background(), messages, inputTools, nil)
 			} else {
-				_, err = client.Chat(context.Background(), messages, []shuttle.Tool{tool})
+				_, err = client.Chat(context.Background(), messages, inputTools)
 			}
 			require.NoError(t, err)
 			request := <-captured
 			tools := request["tools"].([]interface{})
 			require.Len(t, tools, 1)
 			declarations := tools[0].(map[string]interface{})["functionDeclarations"].([]interface{})
-			require.Len(t, declarations, 1)
+			require.Len(t, declarations, 3)
 			data, err := json.Marshal(declarations[0].(map[string]interface{})["parameters"])
 			require.NoError(t, err)
 			var expected map[string]interface{}
@@ -579,6 +600,10 @@ func TestClient_ToolSchemaRequest(t *testing.T) {
 			expectedJSON, err := json.Marshal(expected)
 			require.NoError(t, err)
 			assert.JSONEq(t, string(expectedJSON), string(data))
+			assert.Equal(t, map[string]interface{}{"type": "OBJECT"}, declarations[1].(map[string]interface{})["parameters"])
+			assert.Equal(t, map[string]interface{}{"type": "OBJECT", "description": "No arguments"}, declarations[2].(map[string]interface{})["parameters"])
+			assert.Empty(t, inputTools[1].InputSchema().Type)
+			assert.Empty(t, inputTools[2].InputSchema().Type)
 		})
 	}
 }
@@ -823,7 +848,8 @@ func TestConvertTools(t *testing.T) {
 	require.Len(t, declarations, 1)
 	assert.Equal(t, "get_weather", declarations[0].Name)
 	assert.Equal(t, "Get weather information", declarations[0].Description)
-	assert.Equal(t, "object", declarations[0].Parameters.Type)
+	assert.Equal(t, "OBJECT", declarations[0].Parameters.Type)
+	assert.Equal(t, "STRING", declarations[0].Parameters.Properties["location"].Type)
 	assert.Len(t, declarations[0].Parameters.Properties, 2)
 	assert.Contains(t, declarations[0].Parameters.Required, "location")
 }
@@ -866,14 +892,14 @@ func TestConvertTools_EmptyPropertyTypes(t *testing.T) {
 	props := declarations[0].Parameters.Properties
 
 	// Empty type defaults to "string"
-	assert.Equal(t, "string", props["query"].Type, "empty type should default to string")
+	assert.Equal(t, "STRING", props["query"].Type, "empty type should default to string")
 
 	// Empty type with properties defaults to "object"
-	assert.Equal(t, "object", props["nested"].Type, "empty type with properties should become object")
+	assert.Equal(t, "OBJECT", props["nested"].Type, "empty type with properties should become object")
 
 	// Empty type with items defaults to "array"
-	assert.Equal(t, "array", props["tags"].Type, "empty type with items should become array")
-	assert.Equal(t, "string", props["tags"].Items.Type, "empty item type should default to string")
+	assert.Equal(t, "ARRAY", props["tags"].Type, "empty type with items should become array")
+	assert.Equal(t, "STRING", props["tags"].Items.Type, "empty item type should default to string")
 }
 
 // Mock implementations for testing

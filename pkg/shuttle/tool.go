@@ -16,6 +16,7 @@ package shuttle
 import (
 	"context"
 	"encoding/json"
+	"slices"
 
 	loomv1 "github.com/teradata-labs/loom/gen/go/loom/v1"
 )
@@ -131,13 +132,17 @@ type JSONSchema struct {
 // ToMap recursively serializes every supported JSON Schema keyword.
 // Missing types are inferred unless a composite keyword defines the schema.
 func (s *JSONSchema) ToMap() map[string]interface{} {
+	return s.toMap(true)
+}
+
+func (s *JSONSchema) toMap(inferTypes bool) map[string]interface{} {
 	if s == nil {
 		return nil
 	}
 
 	result := make(map[string]interface{})
 	schemaType := s.Type
-	if schemaType == "" && len(s.AnyOf) == 0 && len(s.OneOf) == 0 && len(s.AllOf) == 0 && s.Not == nil {
+	if inferTypes && schemaType == "" && len(s.AnyOf) == 0 && len(s.OneOf) == 0 && len(s.AllOf) == 0 && s.Not == nil {
 		switch {
 		case s.Properties != nil:
 			schemaType = "object"
@@ -147,27 +152,27 @@ func (s *JSONSchema) ToMap() map[string]interface{} {
 			schemaType = "string"
 		}
 	}
-	if schemaType != "" {
+	if schemaType != "" || !inferTypes {
 		result["type"] = schemaType
 	}
 	if s.Description != "" {
 		result["description"] = s.Description
 	}
-	if s.Properties != nil || schemaType == "object" {
+	if len(s.Properties) > 0 || schemaType == "object" || inferTypes && s.Properties != nil {
 		properties := make(map[string]interface{}, len(s.Properties))
 		for name, property := range s.Properties {
-			properties[name] = property.ToMap()
+			properties[name] = property.toMap(inferTypes)
 		}
 		result["properties"] = properties
 	}
 	if len(s.Required) > 0 {
-		result["required"] = s.Required
+		result["required"] = slices.Clone(s.Required)
 	}
 	if s.Items != nil {
-		result["items"] = s.Items.ToMap()
+		result["items"] = s.Items.toMap(inferTypes)
 	}
 	if len(s.Enum) > 0 {
-		result["enum"] = s.Enum
+		result["enum"] = slices.Clone(s.Enum)
 	}
 	if s.Default != nil {
 		result["default"] = s.Default
@@ -190,28 +195,44 @@ func (s *JSONSchema) ToMap() map[string]interface{} {
 	if s.MaxLength != nil {
 		result["maxLength"] = *s.MaxLength
 	}
-	for keyword, schemas := range map[string][]*JSONSchema{
-		"anyOf": s.AnyOf,
-		"oneOf": s.OneOf,
-		"allOf": s.AllOf,
-	} {
-		if len(schemas) > 0 {
-			alternatives := make([]map[string]interface{}, len(schemas))
-			for index, schema := range schemas {
-				alternatives[index] = schema.ToMap()
-			}
-			result[keyword] = alternatives
-		}
+	if len(s.AnyOf) > 0 {
+		result["anyOf"] = schemaAlternativesToMaps(s.AnyOf, inferTypes)
+	}
+	if len(s.OneOf) > 0 {
+		result["oneOf"] = schemaAlternativesToMaps(s.OneOf, inferTypes)
+	}
+	if len(s.AllOf) > 0 {
+		result["allOf"] = schemaAlternativesToMaps(s.AllOf, inferTypes)
 	}
 	if s.Not != nil {
-		result["not"] = s.Not.ToMap()
+		result["not"] = s.Not.toMap(inferTypes)
 	}
 	return result
 }
 
-// MarshalJSON preserves nested schemas and emits empty object properties for Bedrock.
+func schemaAlternativesToMaps(schemas []*JSONSchema, inferTypes bool) []map[string]interface{} {
+	alternatives := make([]map[string]interface{}, len(schemas))
+	for index, schema := range schemas {
+		alternatives[index] = schema.toMap(inferTypes)
+	}
+	return alternatives
+}
+
+// ToToolMap serializes tool parameters, defaulting an untyped root to an object.
+func (s *JSONSchema) ToToolMap() map[string]interface{} {
+	if s == nil {
+		return nil
+	}
+	root := *s
+	if root.Type == "" {
+		root.Type = "object"
+	}
+	return root.ToMap()
+}
+
+// MarshalJSON preserves declared types and emits empty object properties for Bedrock.
 func (s *JSONSchema) MarshalJSON() ([]byte, error) {
-	return json.Marshal(s.ToMap())
+	return json.Marshal(s.toMap(false))
 }
 
 // ToJSON converts the schema to JSON bytes.

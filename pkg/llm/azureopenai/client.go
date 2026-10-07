@@ -626,7 +626,7 @@ func convertTools(tools []shuttle.Tool, nameMap map[string]string) []openai.Tool
 
 		schema := tool.InputSchema()
 		if schema != nil {
-			apiTool.Function.Parameters = schema.ToMap()
+			apiTool.Function.Parameters = schema.ToToolMap()
 		}
 
 		apiTools = append(apiTools, apiTool)

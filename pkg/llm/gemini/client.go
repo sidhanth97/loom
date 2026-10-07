@@ -486,7 +486,11 @@ func convertTools(tools []shuttle.Tool, nameMap map[string]string) []FunctionDec
 
 		schema := tool.InputSchema()
 		if schema != nil {
-			decl.Parameters = convertSchema(schema)
+			root := *schema
+			if root.Type == "" {
+				root.Type = "object"
+			}
+			decl.Parameters = convertSchema(&root)
 		}
 
 		declarations = append(declarations, decl)
@@ -543,6 +547,7 @@ func convertSchema(schema *shuttle.JSONSchema) Schema {
 	for _, alternative := range schema.AnyOf {
 		result.AnyOf = append(result.AnyOf, convertSchema(alternative))
 	}
+	result.Type = strings.ToUpper(result.Type)
 	return result
 }
 

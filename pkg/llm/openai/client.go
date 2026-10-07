@@ -608,7 +608,7 @@ func (c *Client) convertTools(tools []shuttle.Tool) []Tool {
 		// Convert JSONSchema to OpenAI's parameters format
 		schema := tool.InputSchema()
 		if schema != nil {
-			apiTool.Function.Parameters = schema.ToMap()
+			apiTool.Function.Parameters = schema.ToToolMap()
 		}
 
 		apiTools = append(apiTools, apiTool)
