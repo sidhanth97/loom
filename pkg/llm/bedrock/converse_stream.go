@@ -235,7 +235,7 @@ func (c *Client) convertToolsToConverse(tools []shuttle.Tool) *bedrocktypes.Tool
 
 		if schema != nil {
 			// Build JSON schema document
-			schemaMap := schema.ToMap()
+			schemaMap := llm.NormalizeObjectToolSchema(schema)
 
 			// Debug: Log the schema map before converting to document
 			if os.Getenv("LOOM_DEBUG_BEDROCK") == "1" {

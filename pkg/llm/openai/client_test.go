@@ -438,6 +438,18 @@ func TestClient_ConvertTools(t *testing.T) {
 	assert.Contains(t, props, "units")
 }
 
+func TestClient_ConvertTools_EmptySchema(t *testing.T) {
+	for _, schema := range []*shuttle.JSONSchema{{}, {Description: "No arguments"}, {Properties: map[string]*shuttle.JSONSchema{}}} {
+		client := NewClient(Config{APIKey: "test"})
+		tool := &mockShuttleTool{name: "no_arguments", schema: schema}
+		tools := client.convertTools([]shuttle.Tool{tool})
+		require.Len(t, tools, 1)
+		assert.Equal(t, "object", tools[0].Function.Parameters["type"])
+		assert.Equal(t, map[string]interface{}{}, tools[0].Function.Parameters["properties"])
+		assert.Empty(t, schema.Type)
+	}
+}
+
 func TestClient_ConvertResponse(t *testing.T) {
 	client := NewClient(Config{APIKey: "test", Model: "gpt-4o"})
 
@@ -880,20 +892,28 @@ func TestClient_ToolSchemaRequest(t *testing.T) {
 			defer server.Close()
 			schema, err := shuttle.FromJSON([]byte(schemaJSON))
 			require.NoError(t, err)
-			tool := &mockShuttleTool{name: "create_tasks", schema: schema}
+			inputTools := []shuttle.Tool{
+				&mockShuttleTool{name: "create_tasks", schema: schema},
+				&mockShuttleTool{name: "no_arguments", schema: &shuttle.JSONSchema{}},
+				&mockShuttleTool{name: "description_only", schema: &shuttle.JSONSchema{Description: "No arguments"}},
+			}
 			client := NewClient(Config{APIKey: "test-key", Endpoint: server.URL, Model: "gpt-4o"})
 			messages := []types.Message{{Role: "user", Content: "Create tasks"}}
 			if mode == "stream" {
-				_, err = client.ChatStream(context.Background(), messages, []shuttle.Tool{tool}, nil)
+				_, err = client.ChatStream(context.Background(), messages, inputTools, nil)
 			} else {
-				_, err = client.Chat(context.Background(), messages, []shuttle.Tool{tool})
+				_, err = client.Chat(context.Background(), messages, inputTools)
 			}
 			require.NoError(t, err)
 			request := <-captured
-			require.Len(t, request.Tools, 1)
+			require.Len(t, request.Tools, 3)
 			data, err := json.Marshal(request.Tools[0].Function.Parameters)
 			require.NoError(t, err)
 			assert.JSONEq(t, schemaJSON, string(data))
+			assert.Equal(t, map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}, request.Tools[1].Function.Parameters)
+			assert.Equal(t, map[string]interface{}{"type": "object", "properties": map[string]interface{}{}, "description": "No arguments"}, request.Tools[2].Function.Parameters)
+			assert.Empty(t, inputTools[1].InputSchema().Type)
+			assert.Empty(t, inputTools[2].InputSchema().Type)
 		})
 	}
 }
