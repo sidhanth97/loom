@@ -130,19 +130,19 @@ type JSONSchema struct {
 }
 
 // ToMap recursively serializes every supported JSON Schema keyword.
-// Missing types are inferred unless a composite keyword defines the schema.
+// Missing types are inferred outside composite subtrees.
 func (s *JSONSchema) ToMap() map[string]interface{} {
-	return s.toMap(true)
+	return s.toMap(true, true)
 }
 
-func (s *JSONSchema) toMap(inferTypes bool) map[string]interface{} {
+func (s *JSONSchema) toMap(inferTypes, inferCurrentType bool) map[string]interface{} {
 	if s == nil {
 		return nil
 	}
 
 	result := make(map[string]interface{})
 	schemaType := s.Type
-	if inferTypes && schemaType == "" && len(s.AnyOf) == 0 && len(s.OneOf) == 0 && len(s.AllOf) == 0 && s.Not == nil {
+	if inferTypes && inferCurrentType && schemaType == "" && len(s.AnyOf) == 0 && len(s.OneOf) == 0 && len(s.AllOf) == 0 && s.Not == nil {
 		switch {
 		case s.Properties != nil:
 			schemaType = "object"
@@ -161,7 +161,7 @@ func (s *JSONSchema) toMap(inferTypes bool) map[string]interface{} {
 	if len(s.Properties) > 0 || schemaType == "object" || inferTypes && s.Properties != nil {
 		properties := make(map[string]interface{}, len(s.Properties))
 		for name, property := range s.Properties {
-			properties[name] = property.toMap(inferTypes)
+			properties[name] = property.toMap(inferTypes, inferCurrentType)
 		}
 		result["properties"] = properties
 	}
@@ -169,7 +169,7 @@ func (s *JSONSchema) toMap(inferTypes bool) map[string]interface{} {
 		result["required"] = slices.Clone(s.Required)
 	}
 	if s.Items != nil {
-		result["items"] = s.Items.toMap(inferTypes)
+		result["items"] = s.Items.toMap(inferTypes, inferCurrentType)
 	}
 	if len(s.Enum) > 0 {
 		result["enum"] = slices.Clone(s.Enum)
@@ -205,7 +205,7 @@ func (s *JSONSchema) toMap(inferTypes bool) map[string]interface{} {
 		result["allOf"] = schemaAlternativesToMaps(s.AllOf, inferTypes)
 	}
 	if s.Not != nil {
-		result["not"] = s.Not.toMap(inferTypes)
+		result["not"] = s.Not.toMap(inferTypes, false)
 	}
 	return result
 }
@@ -213,7 +213,7 @@ func (s *JSONSchema) toMap(inferTypes bool) map[string]interface{} {
 func schemaAlternativesToMaps(schemas []*JSONSchema, inferTypes bool) []map[string]interface{} {
 	alternatives := make([]map[string]interface{}, len(schemas))
 	for index, schema := range schemas {
-		alternatives[index] = schema.toMap(inferTypes)
+		alternatives[index] = schema.toMap(inferTypes, false)
 	}
 	return alternatives
 }
@@ -232,7 +232,7 @@ func (s *JSONSchema) ToToolMap() map[string]interface{} {
 
 // MarshalJSON preserves declared types and emits empty object properties for Bedrock.
 func (s *JSONSchema) MarshalJSON() ([]byte, error) {
-	return json.Marshal(s.toMap(false))
+	return json.Marshal(s.toMap(false, false))
 }
 
 // ToJSON converts the schema to JSON bytes.

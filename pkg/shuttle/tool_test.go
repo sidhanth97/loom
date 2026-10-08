@@ -215,6 +215,10 @@ func TestJSONSchema_ToMap(t *testing.T) {
 		{name: "infer empty object", input: `{"properties":{}}`, want: `{"type":"object","properties":{}}`},
 		{name: "infer array", input: `{"items":{"items":{"type":"integer"}}}`, want: `{"type":"array","items":{"type":"array","items":{"type":"integer"}}}`},
 		{name: "infer string", input: `{}`, want: `{"type":"string"}`},
+		{name: "constraint-only composite", input: `{"type":"integer","allOf":[{"minimum":1}]}`},
+		{name: "unconstrained alternative", input: `{"anyOf":[{},{"type":"integer"}]}`},
+		{name: "constraint-only negation", input: `{"type":"integer","not":{"minimum":1}}`},
+		{name: "constraint-only property in composite", input: `{"type":"object","allOf":[{"properties":{"count":{"minimum":1}}}]}`, want: `{"type":"object","properties":{},"allOf":[{"properties":{"count":{"minimum":1}}}]}`},
 		{name: "composite with properties", input: `{"anyOf":[{"type":"null"}],"properties":{}}`},
 	}
 	for _, test := range tests {

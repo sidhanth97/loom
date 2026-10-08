@@ -187,7 +187,10 @@ func (c *Client) Chat(ctx context.Context, messages []llmtypes.Message, tools []
 
 	// Convert tools to Anthropic format with name sanitization
 	c.toolNameMap = make(map[string]string)
-	apiTools := c.convertTools(tools)
+	apiTools, err := c.convertTools(tools)
+	if err != nil {
+		return nil, err
+	}
 
 	// Build request
 	req := &MessagesRequest{
@@ -373,7 +376,7 @@ func appendUserOrCoalesce(msgs []Message, blocks []ContentBlock) []Message {
 // Tool names are sanitized to replace colons with underscores for provider compatibility.
 // The last tool in the list is marked with cache_control: ephemeral so the entire tool
 // list is cached. For Anthropic, cached tool tokens don't count against ITPM rate limits.
-func (c *Client) convertTools(tools []shuttle.Tool) []CacheableTool {
+func (c *Client) convertTools(tools []shuttle.Tool) ([]CacheableTool, error) {
 	var apiTools []CacheableTool
 
 	for _, tool := range tools {
@@ -391,7 +394,10 @@ func (c *Client) convertTools(tools []shuttle.Tool) []CacheableTool {
 		// Convert JSONSchema to Anthropic's input schema format
 		schema := tool.InputSchema()
 		if schema != nil {
-			keywords := llm.NormalizeObjectToolSchema(schema)
+			keywords, err := llm.NormalizeObjectToolSchema(schema)
+			if err != nil {
+				return nil, fmt.Errorf("tool %q schema: %w", originalName, err)
+			}
 			schemaType, _ := keywords["type"].(string)
 			properties := make(map[string]map[string]interface{})
 			for name, property := range keywords["properties"].(map[string]interface{}) {
@@ -415,7 +421,7 @@ func (c *Client) convertTools(tools []shuttle.Tool) []CacheableTool {
 		apiTools[len(apiTools)-1].CacheControl = &CacheControl{Type: "ephemeral"}
 	}
 
-	return apiTools
+	return apiTools, nil
 }
 
 // convertResponse converts Anthropic response to agent format.
@@ -501,7 +507,10 @@ func (c *Client) ChatStream(ctx context.Context, messages []llmtypes.Message,
 	// 1. Build request body (extract system messages and convert to Anthropic format)
 	systemPrompt, apiMessages := c.convertMessages(messages)
 	c.toolNameMap = make(map[string]string)
-	apiTools := c.convertTools(tools)
+	apiTools, err := c.convertTools(tools)
+	if err != nil {
+		return nil, err
+	}
 
 	req := &MessagesRequest{
 		Model:       c.model,

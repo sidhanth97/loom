@@ -499,27 +499,31 @@ func convertTools(tools []shuttle.Tool, nameMap map[string]string) []FunctionDec
 	return declarations
 }
 
-func convertSchemaProperties(props map[string]*shuttle.JSONSchema) map[string]Schema {
+func convertSchemaProperties(props map[string]*shuttle.JSONSchema, inferTypes bool) map[string]Schema {
 	if props == nil {
 		return nil
 	}
 
 	result := make(map[string]Schema)
 	for key, schema := range props {
-		result[key] = convertSchema(schema)
+		result[key] = convertSchemaWithInference(schema, inferTypes)
 	}
 
 	return result
 }
 
 func convertSchema(schema *shuttle.JSONSchema) Schema {
+	return convertSchemaWithInference(schema, true)
+}
+
+func convertSchemaWithInference(schema *shuttle.JSONSchema, inferTypes bool) Schema {
 	if schema == nil {
 		return Schema{}
 	}
 	result := Schema{
 		Type:        schema.Type,
 		Description: schema.Description,
-		Properties:  convertSchemaProperties(schema.Properties),
+		Properties:  convertSchemaProperties(schema.Properties, inferTypes),
 		Required:    schema.Required,
 		Enum:        schema.Enum,
 		Default:     schema.Default,
@@ -530,7 +534,7 @@ func convertSchema(schema *shuttle.JSONSchema) Schema {
 		MinLength:   schema.MinLength,
 		MaxLength:   schema.MaxLength,
 	}
-	if result.Type == "" && len(schema.AnyOf) == 0 {
+	if inferTypes && result.Type == "" && len(schema.AnyOf) == 0 {
 		switch {
 		case schema.Properties != nil:
 			result.Type = "object"
@@ -541,11 +545,11 @@ func convertSchema(schema *shuttle.JSONSchema) Schema {
 		}
 	}
 	if schema.Items != nil {
-		item := convertSchema(schema.Items)
+		item := convertSchemaWithInference(schema.Items, inferTypes)
 		result.Items = &item
 	}
 	for _, alternative := range schema.AnyOf {
-		result.AnyOf = append(result.AnyOf, convertSchema(alternative))
+		result.AnyOf = append(result.AnyOf, convertSchemaWithInference(alternative, false))
 	}
 	result.Type = strings.ToUpper(result.Type)
 	return result

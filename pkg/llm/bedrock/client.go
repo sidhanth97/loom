@@ -241,7 +241,11 @@ func (c *Client) Chat(ctx context.Context, messages []llmtypes.Message, tools []
 
 	// Add tools if provided
 	if len(tools) > 0 {
-		request["tools"] = c.convertTools(tools)
+		apiTools, err := c.convertTools(tools)
+		if err != nil {
+			return nil, err
+		}
+		request["tools"] = apiTools
 	}
 
 	// Marshal request
@@ -343,7 +347,11 @@ func (c *Client) chatStreamDisabled(ctx context.Context, messages []llmtypes.Mes
 
 	// Add tools if provided
 	if len(tools) > 0 {
-		request["tools"] = c.convertTools(tools)
+		apiTools, err := c.convertTools(tools)
+		if err != nil {
+			return nil, err
+		}
+		request["tools"] = apiTools
 	}
 
 	// Marshal request
@@ -632,7 +640,7 @@ func (c *Client) convertMessages(messages []llmtypes.Message) (string, []map[str
 
 // convertTools converts shuttle tools to Bedrock/Anthropic format.
 // Uses standard Anthropic Messages API format with sanitized tool names.
-func (c *Client) convertTools(tools []shuttle.Tool) []map[string]interface{} {
+func (c *Client) convertTools(tools []shuttle.Tool) ([]map[string]interface{}, error) {
 	var apiTools []map[string]interface{}
 
 	// Clear previous mapping
@@ -652,13 +660,17 @@ func (c *Client) convertTools(tools []shuttle.Tool) []map[string]interface{} {
 
 		schema := tool.InputSchema()
 		if schema != nil {
-			apiTool["input_schema"] = llm.NormalizeObjectToolSchema(schema)
+			schemaMap, err := llm.NormalizeObjectToolSchema(schema)
+			if err != nil {
+				return nil, fmt.Errorf("tool %q schema: %w", originalName, err)
+			}
+			apiTool["input_schema"] = schemaMap
 		}
 
 		apiTools = append(apiTools, apiTool)
 	}
 
-	return apiTools
+	return apiTools, nil
 }
 
 // convertSchemaProperties converts JSONSchema properties to Anthropic/Bedrock format.

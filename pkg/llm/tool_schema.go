@@ -1,67 +1,61 @@
 package llm
 
 import (
+	"fmt"
 	"reflect"
 	"slices"
 
 	"github.com/teradata-labs/loom/pkg/shuttle"
 )
 
-// NormalizeObjectToolSchema adapts roots for providers requiring plain objects.
-// Root alternatives advertise their fields and common requirements; the original
-// tool schema remains responsible for validating correlations between fields.
-func NormalizeObjectToolSchema(schema *shuttle.JSONSchema) map[string]interface{} {
+// NormalizeObjectToolSchema losslessly merges object-root allOf schemas.
+// Root alternatives and incompatible constraints return errors instead of being dropped.
+func NormalizeObjectToolSchema(schema *shuttle.JSONSchema) (map[string]interface{}, error) {
 	root := schema.ToToolMap()
 	if root == nil {
-		return nil
+		return nil, nil
 	}
 	return normalizeObjectSchemaRoot(root)
 }
 
-func normalizeObjectSchemaRoot(root map[string]interface{}) map[string]interface{} {
+func normalizeObjectSchemaRoot(root map[string]interface{}) (map[string]interface{}, error) {
+	if schemaType, _ := root["type"].(string); schemaType != "" && schemaType != "object" {
+		return nil, fmt.Errorf("tool schema root must be an object, got %q", schemaType)
+	}
+	for _, keyword := range []string{"anyOf", "oneOf"} {
+		if _, ok := root[keyword]; ok {
+			return nil, fmt.Errorf("cannot losslessly adapt tool schema root %s; place alternatives inside an object property", keyword)
+		}
+	}
 	properties, _ := root["properties"].(map[string]interface{})
 	if properties == nil {
 		properties = make(map[string]interface{})
 	}
 	required, _ := root["required"].([]string)
-	for _, keyword := range []string{"allOf", "anyOf", "oneOf"} {
-		branches, _ := root[keyword].([]map[string]interface{})
-		branchProperties := make(map[string][]interface{})
-		var branchRequired []string
-		for index, branch := range branches {
-			if branch == nil {
-				branch = make(map[string]interface{})
-			}
-			branch = normalizeObjectSchemaRoot(branch)
-			for name, property := range branch["properties"].(map[string]interface{}) {
-				branchProperties[name] = append(branchProperties[name], property)
-			}
-			fields, _ := branch["required"].([]string)
-			if keyword == "allOf" || index == 0 {
-				branchRequired = appendUniqueRequired(branchRequired, fields)
-			} else {
-				branchRequired = slices.DeleteFunc(branchRequired, func(name string) bool {
-					return !slices.Contains(fields, name)
-				})
-			}
+	branches, _ := root["allOf"].([]map[string]interface{})
+	for index, branch := range branches {
+		if branch == nil {
+			return nil, fmt.Errorf("tool schema allOf branch %d is nil", index)
 		}
-		for name, alternatives := range branchProperties {
-			property := alternatives[0]
-			if len(alternatives) > 1 {
-				propertyKeyword := "anyOf"
-				if keyword == "allOf" {
-					propertyKeyword = "allOf"
-				}
-				property = map[string]interface{}{propertyKeyword: alternatives}
-			}
+		normalized, err := normalizeObjectSchemaRoot(branch)
+		if err != nil {
+			return nil, fmt.Errorf("tool schema allOf branch %d: %w", index, err)
+		}
+		for name, property := range normalized["properties"].(map[string]interface{}) {
 			if existing, ok := properties[name]; ok && !reflect.DeepEqual(existing, property) {
 				property = map[string]interface{}{"allOf": []interface{}{existing, property}}
 			}
 			properties[name] = property
 		}
-		required = appendUniqueRequired(required, branchRequired)
-		delete(root, keyword)
+		fields, _ := normalized["required"].([]string)
+		required = appendUniqueRequired(required, fields)
+		for keyword, value := range normalized {
+			if err := mergeObjectSchemaKeyword(root, keyword, value); err != nil {
+				return nil, fmt.Errorf("tool schema allOf branch %d: %w", index, err)
+			}
+		}
 	}
+	delete(root, "allOf")
 	root["type"] = "object"
 	root["properties"] = properties
 	if len(required) > 0 {
@@ -69,7 +63,43 @@ func normalizeObjectSchemaRoot(root map[string]interface{}) map[string]interface
 	} else {
 		delete(root, "required")
 	}
-	return root
+	return root, nil
+}
+
+func mergeObjectSchemaKeyword(root map[string]interface{}, keyword string, value interface{}) error {
+	existing, present := root[keyword]
+	switch keyword {
+	case "type", "properties", "required":
+		return nil
+	case "not":
+		if present {
+			root[keyword] = map[string]interface{}{"anyOf": []interface{}{existing, value}}
+		} else {
+			root[keyword] = value
+		}
+	case "enum":
+		if !present {
+			root[keyword] = value
+			return nil
+		}
+		if !reflect.DeepEqual(existing, value) {
+			return mergeObjectSchemaKeyword(root, "not", map[string]interface{}{
+				"not": map[string]interface{}{"enum": value},
+			})
+		}
+	case "description":
+		if present && !reflect.DeepEqual(existing, value) {
+			root[keyword] = existing.(string) + "\n" + value.(string)
+		} else {
+			root[keyword] = value
+		}
+	default:
+		if present && !reflect.DeepEqual(existing, value) {
+			return fmt.Errorf("cannot losslessly merge conflicting root %s", keyword)
+		}
+		root[keyword] = value
+	}
+	return nil
 }
 
 func appendUniqueRequired(required, fields []string) []string {
