@@ -27,6 +27,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/teradata-labs/loom/pkg/shuttle"
 	"github.com/teradata-labs/loom/pkg/types"
+	"github.com/xeipuuv/gojsonschema"
 )
 
 func TestNewClient_Defaults(t *testing.T) {
@@ -213,7 +214,8 @@ func TestClient_ConvertTools(t *testing.T) {
 		},
 	}
 
-	apiTools := client.convertTools([]shuttle.Tool{mockTool})
+	apiTools, err := client.convertTools([]shuttle.Tool{mockTool})
+	require.NoError(t, err)
 
 	require.Len(t, apiTools, 1)
 
@@ -240,7 +242,7 @@ func TestClient_ConvertTools(t *testing.T) {
 }
 
 func TestClient_ToolSchemaRequest(t *testing.T) {
-	const schemaJSON = `{"type":"object","description":"Task input","required":["tasks"],"allOf":[{"type":"object","properties":{}}],"properties":{
+	const schemaJSON = `{"type":"object","description":"Task input","required":["tasks"],"allOf":[{"type":"object","properties":{},"not":{"required":["forbidden"]}}],"properties":{
 		"tasks":{"type":"array","description":"Tasks to create","items":{
 			"type":"object","description":"A task","required":["idx","subject","details"],"properties":{
 				"idx":{"type":"integer","description":"1-based task number","minimum":0,"maximum":100},
@@ -325,14 +327,40 @@ func TestClient_ToolSchemaRequest(t *testing.T) {
 			require.NoError(t, err)
 			var expected map[string]interface{}
 			require.NoError(t, json.Unmarshal([]byte(schemaJSON), &expected))
+			expected["not"] = expected["allOf"].([]interface{})[0].(map[string]interface{})["not"]
 			delete(expected, "allOf")
 			expectedJSON, err := json.Marshal(expected)
 			require.NoError(t, err)
 			assert.JSONEq(t, string(expectedJSON), string(data))
+			for _, forbidden := range []bool{false, true} {
+				sample := map[string]interface{}{"tasks": []interface{}{}}
+				if forbidden {
+					sample["forbidden"] = true
+				}
+				validation, err := gojsonschema.Validate(gojsonschema.NewGoLoader(inputSchema), gojsonschema.NewGoLoader(sample))
+				require.NoError(t, err)
+				assert.Equal(t, !forbidden, validation.Valid(), "outgoing schema lost its prohibition for %v", sample)
+			}
 			assert.Equal(t, map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}, noArgumentSchemas[0])
 			assert.Equal(t, map[string]interface{}{"type": "object", "properties": map[string]interface{}{}, "description": "No arguments"}, noArgumentSchemas[1])
 			assert.Empty(t, inputTools[1].InputSchema().Type)
 			assert.Empty(t, inputTools[2].InputSchema().Type)
+			for _, keyword := range []string{"anyOf", "oneOf"} {
+				invalid, err := shuttle.FromJSON([]byte(`{"` + keyword + `":[{"type":"object"}]}`))
+				require.NoError(t, err)
+				invalidTools := []shuttle.Tool{&mockTool{name: "ambiguous", schema: invalid}}
+				switch mode {
+				case "stream":
+					_, err = client.ChatStream(context.Background(), messages, invalidTools, nil)
+				case "converse":
+					_, err = client.ChatConverse(context.Background(), messages, invalidTools)
+				default:
+					_, err = client.Chat(context.Background(), messages, invalidTools)
+				}
+				require.ErrorContains(t, err, `tool "ambiguous" schema:`)
+				require.ErrorContains(t, err, "root "+keyword)
+				assert.Empty(t, captured, "unsupported schema made an HTTP request")
+			}
 		})
 	}
 }

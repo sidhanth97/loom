@@ -507,6 +507,20 @@ func TestConvertMessages_EmptyPartsSkipped(t *testing.T) {
 	}
 }
 
+func TestConvertSchema_ConstraintOnlyAlternatives(t *testing.T) {
+	for _, schemaJSON := range []string{
+		`{"type":"INTEGER","anyOf":[{"minimum":1},{}]}`,
+		`{"type":"OBJECT","anyOf":[{"properties":{"count":{"minimum":1}}}]}`,
+	} {
+		schema, err := shuttle.FromJSON([]byte(schemaJSON))
+		require.NoError(t, err)
+		converted := convertSchema(schema)
+		data, err := json.Marshal(converted)
+		require.NoError(t, err)
+		assert.JSONEq(t, schemaJSON, string(data))
+	}
+}
+
 func TestConvertSchema_NilSchemas(t *testing.T) {
 	t.Run("nil schema", func(t *testing.T) {
 		assert.Equal(t, Schema{}, convertSchema(nil))
@@ -531,6 +545,7 @@ func TestClient_ToolSchemaRequest(t *testing.T) {
 				"subject":{"type":"STRING","description":"Short task title","minLength":0,"maxLength":80,"format":"text","pattern":"^[A-Z]","enum":["Task"],"default":"Task"},
 				"details":{"type":"OBJECT","required":["active"],"properties":{"active":{"type":"BOOLEAN","default":false}}},
 				"nullable":{"anyOf":[{"type":"INTEGER"},{"type":"NULL"}]},
+				"bounded":{"type":"INTEGER","anyOf":[{"minimum":1},{}]},
 				"matrix":{"type":"ARRAY","items":{"type":"ARRAY","description":"Row","items":{"type":"STRING","description":"Cell","enum":["a","b"]}}}
 			}
 		}}

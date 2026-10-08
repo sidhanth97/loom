@@ -20,11 +20,13 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/teradata-labs/loom/pkg/observability"
 	"github.com/teradata-labs/loom/pkg/shuttle"
 	"github.com/teradata-labs/loom/pkg/types"
+	"github.com/xeipuuv/gojsonschema"
 )
 
 func TestNewClient(t *testing.T) {
@@ -619,7 +621,7 @@ data: {"type":"message_stop"}
 }
 
 func TestClient_ToolSchemaRequest(t *testing.T) {
-	const schemaJSON = `{"type":"object","description":"Task input","required":["tasks"],"allOf":[{"type":"object","properties":{}}],"properties":{
+	const schemaJSON = `{"type":"object","description":"Task input","required":["tasks"],"allOf":[{"type":"object","properties":{},"not":{"required":["forbidden"]}}],"properties":{
 		"tasks":{"type":"array","description":"Tasks to create","items":{
 			"type":"object","description":"A task","required":["idx","subject","details"],"properties":{
 				"idx":{"type":"integer","description":"1-based task number","minimum":0,"maximum":100},
@@ -681,10 +683,24 @@ func TestClient_ToolSchemaRequest(t *testing.T) {
 			if err := json.Unmarshal([]byte(schemaJSON), &want); err != nil {
 				t.Fatal(err)
 			}
+			want["not"] = want["allOf"].([]interface{})[0].(map[string]interface{})["not"]
 			delete(want, "allOf")
 			got := tools[0].(map[string]interface{})["input_schema"]
 			if !reflect.DeepEqual(want, got) {
 				t.Errorf("expected full nested schema, got %v", got)
+			}
+			for _, forbidden := range []bool{false, true} {
+				sample := map[string]interface{}{"tasks": []interface{}{}}
+				if forbidden {
+					sample["forbidden"] = true
+				}
+				validation, err := gojsonschema.Validate(gojsonschema.NewGoLoader(got), gojsonschema.NewGoLoader(sample))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if validation.Valid() == forbidden {
+					t.Errorf("outgoing schema lost its prohibition for %v", sample)
+				}
 			}
 			for index := 1; index < len(tools); index++ {
 				expected := map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}
@@ -696,6 +712,24 @@ func TestClient_ToolSchemaRequest(t *testing.T) {
 				}
 				if inputTools[index].InputSchema().Type != "" {
 					t.Error("serialization mutated the root schema type")
+				}
+			}
+			for _, keyword := range []string{"anyOf", "oneOf"} {
+				invalid, err := shuttle.FromJSON([]byte(`{"` + keyword + `":[{"type":"object"}]}`))
+				if err != nil {
+					t.Fatal(err)
+				}
+				invalidTools := []shuttle.Tool{&mockTool{name: "ambiguous", schema: invalid}}
+				if mode == "stream" {
+					_, err = client.ChatStream(context.Background(), messages, invalidTools, nil)
+				} else {
+					_, err = client.Chat(context.Background(), messages, invalidTools)
+				}
+				if err == nil || !strings.Contains(err.Error(), `tool "ambiguous" schema:`) || !strings.Contains(err.Error(), "root "+keyword) {
+					t.Fatalf("expected an explicit schema error, got %v", err)
+				}
+				if len(captured) != 0 {
+					t.Fatal("unsupported schema made an HTTP request")
 				}
 			}
 		})
