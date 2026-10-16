@@ -69,25 +69,27 @@ func DefaultAnthropicRateLimiterConfig() llm.RateLimiterConfig {
 
 // Client implements the LLMProvider interface for Anthropic's Claude API.
 type Client struct {
-	apiKey        string
-	model         string
-	endpoint      string
-	httpClient    *http.Client
-	maxTokens     int
-	temperature   float64
-	thinkingLevel string
-	rateLimiter   *llm.RateLimiter
-	toolNameMap   map[string]string // sanitized name → original name
+	strictToolSchemas bool
+	apiKey            string
+	model             string
+	endpoint          string
+	httpClient        *http.Client
+	maxTokens         int
+	temperature       float64
+	thinkingLevel     string
+	rateLimiter       *llm.RateLimiter
+	toolNameMap       map[string]string // sanitized name → original name
 }
 
 // Config holds configuration for the Anthropic client.
 type Config struct {
-	APIKey      string
-	Model       string // Default: claude-sonnet-4-5-20250929
-	Endpoint    string // Default: https://api.anthropic.com/v1/messages
-	Timeout     time.Duration
-	MaxTokens   int     // Default: 4096
-	Temperature float64 // Default: 1.0
+	StrictToolSchemas bool
+	APIKey            string
+	Model             string // Default: claude-sonnet-4-5-20250929
+	Endpoint          string // Default: https://api.anthropic.com/v1/messages
+	Timeout           time.Duration
+	MaxTokens         int     // Default: 4096
+	Temperature       float64 // Default: 1.0
 	// ThinkingLevel requests extended thinking ("", "none" = off). Non-off
 	// levels map to adaptive (display summarized) on 4.6+/5 models and to
 	// budget_tokens tiers (low 4k / medium+auto 16k / high 32k) on older ones.
@@ -130,13 +132,14 @@ func NewClient(config Config) *Client {
 	}
 
 	return &Client{
-		apiKey:        config.APIKey,
-		model:         config.Model,
-		endpoint:      config.Endpoint,
-		maxTokens:     config.MaxTokens,
-		temperature:   config.Temperature,
-		thinkingLevel: config.ThinkingLevel,
-		rateLimiter:   rateLimiter,
+		strictToolSchemas: config.StrictToolSchemas,
+		apiKey:            config.APIKey,
+		model:             config.Model,
+		endpoint:          config.Endpoint,
+		maxTokens:         config.MaxTokens,
+		temperature:       config.Temperature,
+		thinkingLevel:     config.ThinkingLevel,
+		rateLimiter:       rateLimiter,
 		httpClient: &http.Client{
 			Timeout: config.Timeout,
 		},
@@ -194,7 +197,7 @@ func (c *Client) Chat(ctx context.Context, messages []llmtypes.Message, tools []
 
 	// Convert tools to Anthropic format with name sanitization
 	c.toolNameMap = make(map[string]string)
-	apiTools, err := c.convertTools(tools)
+	apiTools, err := c.convertTools(ctx, tools)
 	if err != nil {
 		return nil, err
 	}
@@ -469,11 +472,18 @@ func appendUserOrCoalesce(msgs []Message, blocks []ContentBlock) []Message {
 // Tool names are sanitized to replace colons with underscores for provider compatibility.
 // The last tool in the list is marked with cache_control: ephemeral so the entire tool
 // list is cached. For Anthropic, cached tool tokens don't count against ITPM rate limits.
-func (c *Client) convertTools(tools []shuttle.Tool) ([]CacheableTool, error) {
+func (c *Client) convertTools(ctx context.Context, tools []shuttle.Tool) ([]CacheableTool, error) {
 	var apiTools []CacheableTool
 
 	for _, tool := range tools {
 		originalName := tool.Name()
+		keywords, keep, err := llm.PrepareToolSchema(ctx, originalName, tool.InputSchema(), c.strictToolSchemas)
+		if err != nil {
+			return nil, err
+		}
+		if !keep {
+			continue
+		}
 		sanitizedName := llm.SanitizeToolName(originalName)
 		if c.toolNameMap != nil {
 			c.toolNameMap[sanitizedName] = originalName
@@ -485,12 +495,7 @@ func (c *Client) convertTools(tools []shuttle.Tool) ([]CacheableTool, error) {
 		}
 
 		// Convert JSONSchema to Anthropic's input schema format
-		schema := tool.InputSchema()
-		if schema != nil {
-			keywords, err := llm.NormalizeObjectToolSchema(schema)
-			if err != nil {
-				return nil, fmt.Errorf("tool %q schema: %w", originalName, err)
-			}
+		if keywords != nil {
 			schemaType, _ := keywords["type"].(string)
 			properties := make(map[string]map[string]interface{})
 			for name, property := range keywords["properties"].(map[string]interface{}) {
@@ -621,7 +626,7 @@ func (c *Client) ChatStream(ctx context.Context, messages []llmtypes.Message,
 	// 1. Build request body (extract system messages and convert to Anthropic format)
 	systemPrompt, apiMessages := c.convertMessages(messages)
 	c.toolNameMap = make(map[string]string)
-	apiTools, err := c.convertTools(tools)
+	apiTools, err := c.convertTools(ctx, tools)
 	if err != nil {
 		return nil, err
 	}
