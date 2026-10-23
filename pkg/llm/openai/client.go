@@ -39,6 +39,7 @@ import (
 
 // Client implements the LLMProvider interface for OpenAI's API.
 type Client struct {
+	schemaPolicy           llm.ToolSchemaPolicy
 	strictToolSchemas      bool
 	apiKey                 string
 	model                  string
@@ -698,7 +699,7 @@ func (c *Client) convertTools(ctx context.Context, tools []shuttle.Tool) ([]Tool
 
 	for _, tool := range tools {
 		originalName := tool.Name()
-		parameters, keep, err := llm.PrepareToolSchema(ctx, originalName, tool.InputSchema(), c.strictToolSchemas, "enum", "not")
+		parameters, keep, err := c.schemaPolicy.Prepare(ctx, originalName, tool.InputSchema(), c.strictToolSchemas, "enum", "not")
 		if err != nil {
 			return nil, err
 		}

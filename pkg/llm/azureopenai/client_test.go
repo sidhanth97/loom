@@ -715,7 +715,7 @@ func TestConvertTools_WithNilProperties(t *testing.T) {
 	}
 
 	nameMap := make(map[string]string)
-	apiTools, err := convertTools(context.Background(), []shuttle.Tool{mockTool}, nameMap, false)
+	apiTools, err := (&Client{}).convertTools(context.Background(), []shuttle.Tool{mockTool}, nameMap, false)
 	require.NoError(t, err)
 
 	require.Len(t, apiTools, 1)
@@ -767,7 +767,7 @@ func TestConvertTools_TopLevelNilProperties(t *testing.T) {
 	}
 
 	nameMap := make(map[string]string)
-	apiTools, err := convertTools(context.Background(), []shuttle.Tool{mockTool}, nameMap, false)
+	apiTools, err := (&Client{}).convertTools(context.Background(), []shuttle.Tool{mockTool}, nameMap, false)
 	require.NoError(t, err)
 
 	require.Len(t, apiTools, 1)

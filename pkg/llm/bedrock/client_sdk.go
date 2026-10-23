@@ -39,6 +39,7 @@ import (
 // SDKClient implements the LLMProvider interface using the official Anthropic SDK for Bedrock.
 // This is simpler and better maintained than the direct AWS SDK approach.
 type SDKClient struct {
+	schemaPolicy      llm.ToolSchemaPolicy
 	strictToolSchemas bool
 	client            anthropic.Client
 	modelID           string
@@ -553,7 +554,7 @@ func (c *SDKClient) convertToolsToSDK(ctx context.Context, tools []shuttle.Tool)
 
 	for _, tool := range tools {
 		originalName := tool.Name()
-		schemaMap, keep, err := llm.PrepareToolSchema(ctx, originalName, tool.InputSchema(), c.strictToolSchemas)
+		schemaMap, keep, err := c.schemaPolicy.Prepare(ctx, originalName, tool.InputSchema(), c.strictToolSchemas)
 		if err != nil {
 			return nil, nil, err
 		}

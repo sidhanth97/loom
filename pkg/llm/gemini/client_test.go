@@ -524,6 +524,39 @@ func TestConvertSchema_ConstraintOnlyAlternatives(t *testing.T) {
 	}
 }
 
+func TestConvertSchema_Formats(t *testing.T) {
+	for _, test := range []struct {
+		schemaType string
+		format     string
+		want       string
+	}{
+		{schemaType: "string", format: "uri"},
+		{schemaType: "string", format: "text"},
+		{schemaType: "string", format: "date-time", want: "date-time"},
+		{schemaType: "string", format: "enum", want: "enum"},
+		{schemaType: "integer", format: "int32", want: "int32"},
+		{schemaType: "integer", format: "int64", want: "int64"},
+		{schemaType: "number", format: "float", want: "float"},
+		{schemaType: "number", format: "double", want: "double"},
+		{schemaType: "boolean", format: "uri"},
+		{schemaType: "integer", format: "date-time"},
+	} {
+		t.Run(test.schemaType+"/"+test.format, func(t *testing.T) {
+			child := &shuttle.JSONSchema{Type: test.schemaType, Format: test.format}
+			schema := &shuttle.JSONSchema{Type: "object", Properties: map[string]*shuttle.JSONSchema{
+				"value":  child,
+				"array":  {Type: "array", Items: child},
+				"choice": {AnyOf: []*shuttle.JSONSchema{child}},
+			}}
+			converted := convertSchema(schema)
+			assert.Equal(t, test.want, converted.Properties["value"].Format)
+			assert.Equal(t, test.want, converted.Properties["array"].Items.Format)
+			assert.Equal(t, test.want, converted.Properties["choice"].AnyOf[0].Format)
+			assert.Equal(t, test.format, child.Format)
+		})
+	}
+}
+
 func TestConvertSchema_NilSchemas(t *testing.T) {
 	t.Run("nil schema", func(t *testing.T) {
 		assert.Equal(t, Schema{}, convertSchema(nil))
@@ -591,16 +624,21 @@ func TestClient_ToolSchemaRequest(t *testing.T) {
 				&mockShuttleTool{name: "create_tasks", schema: schema},
 				&mockShuttleTool{name: "no_arguments", schema: &shuttle.JSONSchema{}},
 				&mockShuttleTool{name: "description_only", schema: &shuttle.JSONSchema{Description: "No arguments"}},
+				&mockShuttleTool{name: "null_property", schema: &shuttle.JSONSchema{Properties: map[string]*shuttle.JSONSchema{"a": nil}}},
+				&mockShuttleTool{name: "root_alternative", schema: &shuttle.JSONSchema{AnyOf: []*shuttle.JSONSchema{{Type: "object"}}}},
 			}
 			client := NewClient(Config{APIKey: "test-key", Model: "gemini-3-flash-preview"})
 			client.httpClient.Transport = &mockTransport{baseURL: server.URL, original: server.Client().Transport}
 			messages := []types.Message{{Role: "user", Content: "Create tasks"}}
+			span := &observability.Span{}
+			ctx := observability.ContextWithSpan(context.Background(), span)
 			if mode == "stream" {
-				_, err = client.ChatStream(context.Background(), messages, inputTools, nil)
+				_, err = client.ChatStream(ctx, messages, inputTools, nil)
 			} else {
-				_, err = client.Chat(context.Background(), messages, inputTools)
+				_, err = client.Chat(ctx, messages, inputTools)
 			}
 			require.NoError(t, err)
+			require.Len(t, span.Events, 2)
 			request := <-captured
 			tools := request["tools"].([]interface{})
 			require.Len(t, tools, 1)
@@ -611,15 +649,9 @@ func TestClient_ToolSchemaRequest(t *testing.T) {
 			var expected map[string]interface{}
 			require.NoError(t, json.Unmarshal([]byte(schemaJSON), &expected))
 			properties := expected["properties"].(map[string]interface{})
-			expectedTasks := properties["tasks"].(map[string]interface{})
-			delete(expectedTasks, "type")
-			item := expectedTasks["items"].(map[string]interface{})
-			delete(item, "type")
+			item := properties["tasks"].(map[string]interface{})["items"].(map[string]interface{})
 			expectedSubject := item["properties"].(map[string]interface{})["subject"].(map[string]interface{})
-			delete(expectedSubject, "type")
-			expectedMatrix := item["properties"].(map[string]interface{})["matrix"].(map[string]interface{})
-			delete(expectedMatrix, "type")
-			delete(expectedMatrix["items"].(map[string]interface{}), "type")
+			delete(expectedSubject, "format")
 			expectedSubject["minLength"] = "0"
 			expectedSubject["maxLength"] = "80"
 			expectedJSON, err := json.Marshal(expected)
@@ -629,6 +661,24 @@ func TestClient_ToolSchemaRequest(t *testing.T) {
 			assert.Equal(t, map[string]interface{}{"type": "OBJECT", "description": "No arguments"}, declarations[2].(map[string]interface{})["parameters"])
 			assert.Empty(t, inputTools[1].InputSchema().Type)
 			assert.Empty(t, inputTools[2].InputSchema().Type)
+			client.strictToolSchemas = true
+			for _, invalidTool := range inputTools[3:] {
+				if mode == "stream" {
+					_, err = client.ChatStream(context.Background(), messages, []shuttle.Tool{invalidTool}, nil)
+				} else {
+					_, err = client.Chat(context.Background(), messages, []shuttle.Tool{invalidTool})
+				}
+				require.ErrorContains(t, err, invalidTool.Name())
+				assert.Empty(t, captured)
+			}
+			client.strictToolSchemas = false
+			if mode == "stream" {
+				_, err = client.ChatStream(context.Background(), messages, inputTools[3:], nil)
+			} else {
+				_, err = client.Chat(context.Background(), messages, inputTools[3:])
+			}
+			require.NoError(t, err)
+			assert.NotContains(t, <-captured, "tools")
 		})
 	}
 }
@@ -895,7 +945,8 @@ func TestConvertTools(t *testing.T) {
 
 	tools := []shuttle.Tool{mockTool}
 	nameMap := make(map[string]string)
-	declarations := convertTools(tools, nameMap)
+	declarations, err := (&Client{}).convertTools(context.Background(), tools, nameMap)
+	require.NoError(t, err)
 
 	require.Len(t, declarations, 1)
 	assert.Equal(t, "get_weather", declarations[0].Name)
@@ -938,16 +989,17 @@ func TestConvertTools_EmptyPropertyTypes(t *testing.T) {
 
 	tools := []shuttle.Tool{mockTool}
 	nameMap := make(map[string]string)
-	declarations := convertTools(tools, nameMap)
+	declarations, err := (&Client{}).convertTools(context.Background(), tools, nameMap)
+	require.NoError(t, err)
 
 	require.Len(t, declarations, 1)
 	props := declarations[0].Parameters.Properties
 
-	assert.Empty(t, props["query"].Type)
-	assert.Empty(t, props["nested"].Type)
+	assert.Equal(t, "STRING", props["query"].Type)
+	assert.Equal(t, "OBJECT", props["nested"].Type)
 	assert.Equal(t, "STRING", props["nested"].Properties["field"].Type)
-	assert.Empty(t, props["tags"].Type)
-	assert.Empty(t, props["tags"].Items.Type)
+	assert.Equal(t, "ARRAY", props["tags"].Type)
+	assert.Equal(t, "STRING", props["tags"].Items.Type)
 }
 
 // Mock implementations for testing

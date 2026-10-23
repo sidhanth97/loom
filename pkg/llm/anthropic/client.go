@@ -69,6 +69,7 @@ func DefaultAnthropicRateLimiterConfig() llm.RateLimiterConfig {
 
 // Client implements the LLMProvider interface for Anthropic's Claude API.
 type Client struct {
+	schemaPolicy      llm.ToolSchemaPolicy
 	strictToolSchemas bool
 	apiKey            string
 	model             string
@@ -477,7 +478,7 @@ func (c *Client) convertTools(ctx context.Context, tools []shuttle.Tool) ([]Cach
 
 	for _, tool := range tools {
 		originalName := tool.Name()
-		keywords, keep, err := llm.PrepareToolSchema(ctx, originalName, tool.InputSchema(), c.strictToolSchemas)
+		keywords, keep, err := c.schemaPolicy.Prepare(ctx, originalName, tool.InputSchema(), c.strictToolSchemas)
 		if err != nil {
 			return nil, err
 		}

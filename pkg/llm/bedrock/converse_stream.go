@@ -224,7 +224,7 @@ func (c *Client) convertToolsToConverse(ctx context.Context, tools []shuttle.Too
 
 	for _, tool := range tools {
 		originalName := tool.Name()
-		schemaMap, keep, err := llm.PrepareToolSchema(ctx, originalName, tool.InputSchema(), c.strictToolSchemas)
+		schemaMap, keep, err := c.schemaPolicy.Prepare(ctx, originalName, tool.InputSchema(), c.strictToolSchemas)
 		if err != nil {
 			return nil, err
 		}

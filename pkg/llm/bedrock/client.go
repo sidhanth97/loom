@@ -38,6 +38,7 @@ import (
 // preventing AWS Bedrock throttling when multiple agents make concurrent requests.
 // Client implements the LLMProvider interface for AWS Bedrock.
 type Client struct {
+	schemaPolicy      llm.ToolSchemaPolicy
 	strictToolSchemas bool
 	client            *bedrockruntime.Client
 	modelID           string
@@ -672,7 +673,7 @@ func (c *Client) convertTools(ctx context.Context, tools []shuttle.Tool) ([]map[
 
 	for _, tool := range tools {
 		originalName := tool.Name()
-		schemaMap, keep, err := llm.PrepareToolSchema(ctx, originalName, tool.InputSchema(), c.strictToolSchemas)
+		schemaMap, keep, err := c.schemaPolicy.Prepare(ctx, originalName, tool.InputSchema(), c.strictToolSchemas)
 		if err != nil {
 			return nil, err
 		}

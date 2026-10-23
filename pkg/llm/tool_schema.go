@@ -5,15 +5,22 @@ import (
 	"fmt"
 	"reflect"
 	"slices"
+	"sync"
 
 	"github.com/teradata-labs/loom/pkg/observability"
 	"github.com/teradata-labs/loom/pkg/shuttle"
 	"go.uber.org/zap"
 )
 
-// PrepareToolSchema omits incompatible tools unless strict validation is enabled.
+// ToolSchemaPolicy tracks warnings for incompatible tools on one provider client.
+// Its zero value is ready for use and safe for concurrent requests.
+type ToolSchemaPolicy struct {
+	warned sync.Map
+}
+
+// Prepare omits incompatible tools unless strict validation is enabled.
 // Providers may additionally disallow keywords that remain at the normalized root.
-func PrepareToolSchema(ctx context.Context, name string, schema *shuttle.JSONSchema, strict bool, disallowedRootKeywords ...string) (map[string]interface{}, bool, error) {
+func (p *ToolSchemaPolicy) Prepare(ctx context.Context, name string, schema *shuttle.JSONSchema, strict bool, disallowedRootKeywords ...string) (map[string]interface{}, bool, error) {
 	normalized, err := NormalizeObjectToolSchema(schema)
 	if err == nil {
 		for _, keyword := range disallowedRootKeywords {
@@ -23,28 +30,80 @@ func PrepareToolSchema(ctx context.Context, name string, schema *shuttle.JSONSch
 			}
 		}
 	}
+	keep, err := p.Check(ctx, name, strict, err)
+	if !keep {
+		return nil, false, err
+	}
+	return normalized, true, nil
+}
+
+// Check applies the omission policy to a provider-specific schema validation error.
+func (p *ToolSchemaPolicy) Check(ctx context.Context, name string, strict bool, err error) (bool, error) {
 	if err == nil {
-		return normalized, true, nil
+		return true, nil
 	}
 	err = fmt.Errorf("tool %q schema: %w", name, err)
 	if strict {
-		return nil, false, err
+		return false, err
 	}
-	zap.L().Warn("omitting tool with incompatible input schema", zap.String("tool", name), zap.Error(err))
+	if _, warned := p.warned.LoadOrStore(name, struct{}{}); !warned {
+		zap.L().Warn("omitting tool with incompatible input schema", zap.String("tool", name), zap.Error(err))
+	}
 	if span := observability.SpanFromContext(ctx); span != nil {
 		span.AddEvent("llm.tool.schema.skipped", map[string]interface{}{"tool": name, "reason": err.Error()})
 	}
-	return nil, false, nil
+	return false, nil
 }
 
 // NormalizeObjectToolSchema losslessly merges object-root allOf schemas.
 // Root alternatives and incompatible constraints return errors instead of being dropped.
 func NormalizeObjectToolSchema(schema *shuttle.JSONSchema) (map[string]interface{}, error) {
+	if err := ValidateToolSchema(schema); err != nil {
+		return nil, err
+	}
 	root := schema.ToToolMap()
 	if root == nil {
 		return nil, nil
 	}
 	return normalizeObjectSchemaRoot(root)
+}
+
+// ValidateToolSchema rejects null schema nodes without rejecting an absent tool schema.
+func ValidateToolSchema(schema *shuttle.JSONSchema) error {
+	if schema == nil {
+		return nil
+	}
+	return validateToolSchemaNode(schema, "$")
+}
+
+func validateToolSchemaNode(schema *shuttle.JSONSchema, path string) error {
+	if schema == nil {
+		return fmt.Errorf("tool schema %s is null", path)
+	}
+	for name, property := range schema.Properties {
+		if err := validateToolSchemaNode(property, fmt.Sprintf("%s.properties[%q]", path, name)); err != nil {
+			return err
+		}
+	}
+	if schema.Items != nil {
+		if err := validateToolSchemaNode(schema.Items, path+".items"); err != nil {
+			return err
+		}
+	}
+	for _, composite := range []struct {
+		name     string
+		branches []*shuttle.JSONSchema
+	}{{"anyOf", schema.AnyOf}, {"oneOf", schema.OneOf}, {"allOf", schema.AllOf}} {
+		for index, branch := range composite.branches {
+			if err := validateToolSchemaNode(branch, fmt.Sprintf("%s.%s[%d]", path, composite.name, index)); err != nil {
+				return err
+			}
+		}
+	}
+	if schema.Not != nil {
+		return validateToolSchemaNode(schema.Not, path+".not")
+	}
+	return nil
 }
 
 func normalizeObjectSchemaRoot(root map[string]interface{}) (map[string]interface{}, error) {
@@ -120,6 +179,10 @@ func mergeObjectSchemaKeyword(root map[string]interface{}, keyword string, value
 		if present && !reflect.DeepEqual(existing, value) {
 			root[keyword] = existing.(string) + "\n" + value.(string)
 		} else {
+			root[keyword] = value
+		}
+	case "default":
+		if !present {
 			root[keyword] = value
 		}
 	default:

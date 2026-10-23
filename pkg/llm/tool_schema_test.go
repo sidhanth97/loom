@@ -3,6 +3,7 @@ package llm
 import (
 	"context"
 	"encoding/json"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -30,6 +31,11 @@ func TestPrepareToolSchema(t *testing.T) {
 		{name: "openai prohibition", input: `{"not":{"required":["blocked"]}}`, disallowed: []string{"enum", "not"}},
 		{name: "openai enum", input: `{"enum":[{}]}`, disallowed: []string{"enum", "not"}},
 		{name: "strict openai enum", input: `{"enum":[{}]}`, strict: true, disallowed: []string{"enum", "not"}, wantError: true},
+		{name: "null property", input: `{"properties":{"a":null}}`},
+		{name: "strict null property", input: `{"properties":{"a":null}}`, strict: true, wantError: true},
+		{name: "null property in item", input: `{"properties":{"array":{"items":{"properties":{"a":null}}}}}`},
+		{name: "null alternative", input: `{"properties":{"choice":{"anyOf":[null]}}}`},
+		{name: "null property in negation", input: `{"not":{"properties":{"a":null}}}`},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			core, logs := observer.New(zap.WarnLevel)
@@ -40,7 +46,8 @@ func TestPrepareToolSchema(t *testing.T) {
 			ctx := observability.ContextWithSpan(context.Background(), span)
 			schema, err := shuttle.FromJSON([]byte(test.input))
 			require.NoError(t, err)
-			result, keep, err := PrepareToolSchema(ctx, "problem_tool", schema, test.strict, test.disallowed...)
+			policy := &ToolSchemaPolicy{}
+			result, keep, err := policy.Prepare(ctx, "problem_tool", schema, test.strict, test.disallowed...)
 			assert.Equal(t, test.keep, keep)
 			if test.wantError {
 				require.ErrorContains(t, err, `tool "problem_tool" schema:`)
@@ -66,10 +73,44 @@ func TestPrepareToolSchema(t *testing.T) {
 			}
 		})
 	}
-	result, keep, err := PrepareToolSchema(context.Background(), "no_schema", nil, false)
+	policy := &ToolSchemaPolicy{}
+	result, keep, err := policy.Prepare(context.Background(), "no_schema", nil, false)
 	require.NoError(t, err)
 	assert.True(t, keep)
 	assert.Nil(t, result)
+}
+
+func TestToolSchemaPolicyWarnsOnce(t *testing.T) {
+	core, logs := observer.New(zap.WarnLevel)
+	previous := zap.L()
+	zap.ReplaceGlobals(zap.New(core))
+	t.Cleanup(func() { zap.ReplaceGlobals(previous) })
+	policy := &ToolSchemaPolicy{}
+	schema := &shuttle.JSONSchema{AnyOf: []*shuttle.JSONSchema{{Type: "object"}}}
+	span := &observability.Span{}
+	ctx := observability.ContextWithSpan(context.Background(), span)
+	for attempt := 0; attempt < 3; attempt++ {
+		_, keep, err := policy.Prepare(ctx, "incompatible", schema, false)
+		require.NoError(t, err)
+		assert.False(t, keep)
+	}
+	assert.Equal(t, 1, logs.Len())
+	assert.Len(t, span.Events, 3)
+	var requests sync.WaitGroup
+	for attempt := 0; attempt < 20; attempt++ {
+		requests.Go(func() {
+			_, keep, err := policy.Prepare(context.Background(), "concurrent", schema, false)
+			assert.NoError(t, err)
+			assert.False(t, keep)
+		})
+	}
+	requests.Wait()
+	assert.Equal(t, 2, logs.Len())
+	otherClient := &ToolSchemaPolicy{}
+	_, keep, err := otherClient.Prepare(context.Background(), "incompatible", schema, false)
+	require.NoError(t, err)
+	assert.False(t, keep)
+	assert.Equal(t, 3, logs.Len())
 }
 
 func TestNormalizeObjectToolSchemaPreservesProhibition(t *testing.T) {
@@ -256,7 +297,7 @@ func TestNormalizeObjectToolSchema(t *testing.T) {
 		{
 			name:      "nil branch is rejected",
 			input:     `{"allOf":[null]}`,
-			wantError: "tool schema allOf branch 0 is nil",
+			wantError: "tool schema $.allOf[0] is null",
 		},
 		{
 			name:  "branch annotations and other supported keywords survive",
@@ -269,9 +310,14 @@ func TestNormalizeObjectToolSchema(t *testing.T) {
 			want:  `{"type":"object","properties":{},"default":{}}`,
 		},
 		{
-			name:      "conflicting defaults are explicit errors",
-			input:     `{"default":{"mode":"staging"},"allOf":[{"default":{"mode":"production"}}]}`,
-			wantError: "cannot losslessly merge conflicting root default",
+			name:  "root default wins conflicting annotations",
+			input: `{"default":{"mode":"staging"},"allOf":[{"default":{"mode":"production"}}]}`,
+			want:  `{"type":"object","properties":{},"default":{"mode":"staging"}}`,
+		},
+		{
+			name:  "first branch default wins without a root annotation",
+			input: `{"allOf":[{"default":{"mode":"staging"}},{"default":{"mode":"production"}}]}`,
+			want:  `{"type":"object","properties":{},"default":{"mode":"staging"}}`,
 		},
 		{
 			name:      "explicit scalar root is not silently replaced",

@@ -37,6 +37,7 @@ import (
 // Client implements the LLMProvider interface for Azure OpenAI.
 // Azure OpenAI uses deployment-based routing and supports dual authentication.
 type Client struct {
+	schemaPolicy      llm.ToolSchemaPolicy
 	strictToolSchemas bool
 	// Azure-specific configuration
 	endpoint     string // https://{resource}.openai.azure.com
@@ -228,7 +229,7 @@ func (c *Client) Chat(ctx context.Context, messages []llmtypes.Message, tools []
 	// Convert tools to OpenAI format with name sanitization
 	// Azure OpenAI requires names matching ^[a-zA-Z0-9_.\-]+$ (no colons)
 	c.toolNameMap = make(map[string]string)
-	apiTools, err := convertTools(ctx, tools, c.toolNameMap, c.strictToolSchemas)
+	apiTools, err := c.convertTools(ctx, tools, c.toolNameMap, c.strictToolSchemas)
 	if err != nil {
 		return nil, err
 	}
@@ -611,12 +612,12 @@ func convertMessages(messages []llmtypes.Message) []openai.ChatMessage {
 	return apiMessages
 }
 
-func convertTools(ctx context.Context, tools []shuttle.Tool, nameMap map[string]string, strict bool) ([]openai.Tool, error) {
+func (c *Client) convertTools(ctx context.Context, tools []shuttle.Tool, nameMap map[string]string, strict bool) ([]openai.Tool, error) {
 	var apiTools []openai.Tool
 
 	for _, tool := range tools {
 		originalName := tool.Name()
-		parameters, keep, err := llm.PrepareToolSchema(ctx, originalName, tool.InputSchema(), strict, "enum", "not")
+		parameters, keep, err := c.schemaPolicy.Prepare(ctx, originalName, tool.InputSchema(), strict, "enum", "not")
 		if err != nil {
 			return nil, err
 		}
@@ -654,7 +655,7 @@ func (c *Client) ChatStream(ctx context.Context, messages []llmtypes.Message,
 	// Build request (same as non-streaming)
 	apiMessages := convertMessages(messages)
 	c.toolNameMap = make(map[string]string)
-	apiTools, err := convertTools(ctx, tools, c.toolNameMap, c.strictToolSchemas)
+	apiTools, err := c.convertTools(ctx, tools, c.toolNameMap, c.strictToolSchemas)
 	if err != nil {
 		return nil, err
 	}
