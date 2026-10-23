@@ -533,17 +533,45 @@ func validateGeminiToolSchema(schema *shuttle.JSONSchema) error {
 			return fmt.Errorf("unsupported Gemini tool schema root %s; place the constraint inside an object property", keyword.name)
 		}
 	}
+	return validateGeminiNestedComposites(schema, "$")
+}
+
+func validateGeminiNestedComposites(schema *shuttle.JSONSchema, path string) error {
+	if schema == nil {
+		return nil
+	}
+	for _, keyword := range []struct {
+		name    string
+		present bool
+	}{{"oneOf", len(schema.OneOf) > 0}, {"allOf", len(schema.AllOf) > 0}, {"not", schema.Not != nil}} {
+		if keyword.present {
+			return fmt.Errorf("unsupported Gemini tool schema %s at %s", keyword.name, path)
+		}
+	}
+	for name, property := range schema.Properties {
+		if err := validateGeminiNestedComposites(property, fmt.Sprintf("%s.properties[%q]", path, name)); err != nil {
+			return err
+		}
+	}
+	if err := validateGeminiNestedComposites(schema.Items, path+".items"); err != nil {
+		return err
+	}
+	for index, branch := range schema.AnyOf {
+		if err := validateGeminiNestedComposites(branch, fmt.Sprintf("%s.anyOf[%d]", path, index)); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
-func convertSchemaProperties(props map[string]*shuttle.JSONSchema, inferTypes bool) map[string]Schema {
+func convertSchemaProperties(props map[string]*shuttle.JSONSchema) map[string]Schema {
 	if props == nil {
 		return nil
 	}
 
 	result := make(map[string]Schema)
 	for key, schema := range props {
-		result[key] = convertSchemaWithInference(schema, inferTypes)
+		result[key] = convertSchema(schema)
 	}
 
 	return result
@@ -553,14 +581,14 @@ func convertSchema(schema *shuttle.JSONSchema) Schema {
 	return convertSchemaWithInference(schema, true)
 }
 
-func convertSchemaWithInference(schema *shuttle.JSONSchema, inferTypes bool) Schema {
+func convertSchemaWithInference(schema *shuttle.JSONSchema, inferCurrentType bool) Schema {
 	if schema == nil {
 		return Schema{}
 	}
 	result := Schema{
 		Type:        schema.Type,
 		Description: schema.Description,
-		Properties:  convertSchemaProperties(schema.Properties, inferTypes),
+		Properties:  convertSchemaProperties(schema.Properties),
 		Required:    schema.Required,
 		Enum:        schema.Enum,
 		Default:     schema.Default,
@@ -571,18 +599,11 @@ func convertSchemaWithInference(schema *shuttle.JSONSchema, inferTypes bool) Sch
 		MinLength:   schema.MinLength,
 		MaxLength:   schema.MaxLength,
 	}
-	if inferTypes && result.Type == "" && len(schema.AnyOf) == 0 {
-		switch {
-		case schema.Properties != nil:
-			result.Type = "object"
-		case schema.Items != nil:
-			result.Type = "array"
-		default:
-			result.Type = "string"
-		}
+	if inferCurrentType && result.Type == "" && len(schema.AnyOf) == 0 {
+		result.Type = llm.InferSchemaType(schema)
 	}
 	if schema.Items != nil {
-		item := convertSchemaWithInference(schema.Items, inferTypes)
+		item := convertSchema(schema.Items)
 		result.Items = &item
 	}
 	for _, alternative := range schema.AnyOf {

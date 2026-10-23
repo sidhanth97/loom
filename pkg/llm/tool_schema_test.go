@@ -15,6 +15,29 @@ import (
 	"go.uber.org/zap/zaptest/observer"
 )
 
+func TestInferSchemaType(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		schema *shuttle.JSONSchema
+		want   string
+	}{
+		{name: "absent schema"},
+		{name: "empty", schema: &shuttle.JSONSchema{}, want: "string"},
+		{name: "object", schema: &shuttle.JSONSchema{Properties: map[string]*shuttle.JSONSchema{}}, want: "object"},
+		{name: "array", schema: &shuttle.JSONSchema{Items: &shuttle.JSONSchema{}}, want: "array"},
+		{name: "object precedence", schema: &shuttle.JSONSchema{Properties: map[string]*shuttle.JSONSchema{}, Items: &shuttle.JSONSchema{}}, want: "object"},
+		{name: "declared type", schema: &shuttle.JSONSchema{Type: "integer", Properties: map[string]*shuttle.JSONSchema{}}, want: "integer"},
+		{name: "declared casing", schema: &shuttle.JSONSchema{Type: "OBJECT"}, want: "OBJECT"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			assert.Equal(t, test.want, InferSchemaType(test.schema))
+			if test.schema != nil && test.name != "declared type" && test.name != "declared casing" {
+				assert.Empty(t, test.schema.Type)
+			}
+		})
+	}
+}
+
 func TestPrepareToolSchema(t *testing.T) {
 	for _, test := range []struct {
 		name       string
@@ -96,6 +119,15 @@ func TestToolSchemaPolicyWarnsOnce(t *testing.T) {
 	}
 	assert.Equal(t, 1, logs.Len())
 	assert.Len(t, span.Events, 3)
+	changedSchema := &shuttle.JSONSchema{Properties: map[string]*shuttle.JSONSchema{"a": nil}}
+	for attempt := 0; attempt < 2; attempt++ {
+		_, keep, err := policy.Prepare(ctx, "incompatible", changedSchema, false)
+		require.NoError(t, err)
+		assert.False(t, keep)
+	}
+	assert.Equal(t, 2, logs.Len())
+	assert.Len(t, span.Events, 5)
+	assert.Contains(t, logs.All()[1].ContextMap()["error"], "is null")
 	var requests sync.WaitGroup
 	for attempt := 0; attempt < 20; attempt++ {
 		requests.Go(func() {
@@ -105,12 +137,12 @@ func TestToolSchemaPolicyWarnsOnce(t *testing.T) {
 		})
 	}
 	requests.Wait()
-	assert.Equal(t, 2, logs.Len())
+	assert.Equal(t, 3, logs.Len())
 	otherClient := &ToolSchemaPolicy{}
 	_, keep, err := otherClient.Prepare(context.Background(), "incompatible", schema, false)
 	require.NoError(t, err)
 	assert.False(t, keep)
-	assert.Equal(t, 3, logs.Len())
+	assert.Equal(t, 4, logs.Len())
 }
 
 func TestNormalizeObjectToolSchemaPreservesProhibition(t *testing.T) {

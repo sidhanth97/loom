@@ -18,6 +18,24 @@ type ToolSchemaPolicy struct {
 	warned sync.Map
 }
 
+// InferSchemaType returns a declared type or the legacy object/array/string fallback.
+// It does not mutate or traverse the schema; callers control inference at composite nodes.
+func InferSchemaType(schema *shuttle.JSONSchema) string {
+	if schema == nil {
+		return ""
+	}
+	if schema.Type != "" {
+		return schema.Type
+	}
+	if schema.Properties != nil {
+		return "object"
+	}
+	if schema.Items != nil {
+		return "array"
+	}
+	return "string"
+}
+
 // Prepare omits incompatible tools unless strict validation is enabled.
 // Providers may additionally disallow keywords that remain at the normalized root.
 func (p *ToolSchemaPolicy) Prepare(ctx context.Context, name string, schema *shuttle.JSONSchema, strict bool, disallowedRootKeywords ...string) (map[string]interface{}, bool, error) {
@@ -46,7 +64,11 @@ func (p *ToolSchemaPolicy) Check(ctx context.Context, name string, strict bool, 
 	if strict {
 		return false, err
 	}
-	if _, warned := p.warned.LoadOrStore(name, struct{}{}); !warned {
+	warningKey := struct {
+		tool   string
+		reason string
+	}{tool: name, reason: err.Error()}
+	if _, warned := p.warned.LoadOrStore(warningKey, struct{}{}); !warned {
 		zap.L().Warn("omitting tool with incompatible input schema", zap.String("tool", name), zap.Error(err))
 	}
 	if span := observability.SpanFromContext(ctx); span != nil {

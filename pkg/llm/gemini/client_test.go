@@ -511,16 +511,44 @@ func TestConvertMessages_EmptyPartsSkipped(t *testing.T) {
 }
 
 func TestConvertSchema_ConstraintOnlyAlternatives(t *testing.T) {
-	for _, schemaJSON := range []string{
-		`{"type":"INTEGER","anyOf":[{"minimum":1},{}]}`,
-		`{"type":"OBJECT","anyOf":[{"properties":{"count":{"minimum":1}}}]}`,
+	for _, test := range []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{
+			name:  "branch nodes remain untyped",
+			input: `{"type":"INTEGER","anyOf":[{"minimum":1},{}]}`,
+			want:  `{"type":"INTEGER","anyOf":[{"minimum":1},{}]}`,
+		},
+		{
+			name:  "branch properties resume fill-in",
+			input: `{"type":"OBJECT","anyOf":[{"properties":{"count":{"minimum":1}}}]}`,
+			want:  `{"type":"OBJECT","anyOf":[{"properties":{"count":{"type":"STRING","minimum":1}}}]}`,
+		},
+		{
+			name:  "nullable object property from review",
+			input: `{"type":"OBJECT","properties":{"p":{"anyOf":[{"type":"OBJECT","properties":{"v":{"description":"any JSON value"}}},{"type":"NULL"}]}}}`,
+			want:  `{"type":"OBJECT","properties":{"p":{"anyOf":[{"type":"OBJECT","properties":{"v":{"type":"STRING","description":"any JSON value"}}},{"type":"NULL"}]}}}`,
+		},
+		{
+			name:  "branch items resume recursive fill-in",
+			input: `{"type":"OBJECT","properties":{"p":{"anyOf":[{"type":"ARRAY","items":{"properties":{"v":{},"rows":{"items":{}}}}},{"type":"NULL"}]}}}`,
+			want:  `{"type":"OBJECT","properties":{"p":{"anyOf":[{"type":"ARRAY","items":{"type":"OBJECT","properties":{"v":{"type":"STRING"},"rows":{"type":"ARRAY","items":{"type":"STRING"}}}}},{"type":"NULL"}]}}}`,
+		},
 	} {
-		schema, err := shuttle.FromJSON([]byte(schemaJSON))
-		require.NoError(t, err)
-		converted := convertSchema(schema)
-		data, err := json.Marshal(converted)
-		require.NoError(t, err)
-		assert.JSONEq(t, schemaJSON, string(data))
+		t.Run(test.name, func(t *testing.T) {
+			schema, err := shuttle.FromJSON([]byte(test.input))
+			require.NoError(t, err)
+			before, err := json.Marshal(schema)
+			require.NoError(t, err)
+			data, err := json.Marshal(convertSchema(schema))
+			require.NoError(t, err)
+			assert.JSONEq(t, test.want, string(data))
+			after, err := json.Marshal(schema)
+			require.NoError(t, err)
+			assert.Equal(t, before, after)
+		})
 	}
 }
 
@@ -573,8 +601,40 @@ func TestConvertSchema_NilSchemas(t *testing.T) {
 	})
 }
 
+func TestValidateGeminiToolSchema_NestedComposites(t *testing.T) {
+	for _, keyword := range []string{"oneOf", "allOf", "not"} {
+		unsupported := &shuttle.JSONSchema{}
+		branch := &shuttle.JSONSchema{Type: "object", Properties: map[string]*shuttle.JSONSchema{"x": {Type: "string"}}}
+		switch keyword {
+		case "oneOf":
+			unsupported.OneOf = []*shuttle.JSONSchema{branch}
+		case "allOf":
+			unsupported.AllOf = []*shuttle.JSONSchema{branch}
+		case "not":
+			unsupported.Not = branch
+		}
+		for _, test := range []struct {
+			name     string
+			property *shuttle.JSONSchema
+		}{
+			{name: "property", property: unsupported},
+			{name: "item", property: &shuttle.JSONSchema{Type: "array", Items: unsupported}},
+			{name: "anyOf branch", property: &shuttle.JSONSchema{AnyOf: []*shuttle.JSONSchema{{Type: "object", Properties: map[string]*shuttle.JSONSchema{"nested": unsupported}}, {Type: "null"}}}},
+		} {
+			t.Run(keyword+"/"+test.name, func(t *testing.T) {
+				schema := &shuttle.JSONSchema{Type: "object", Properties: map[string]*shuttle.JSONSchema{"p": test.property}}
+				err := validateGeminiToolSchema(schema)
+				require.ErrorContains(t, err, keyword)
+				require.ErrorContains(t, err, `$.properties["p"]`)
+			})
+		}
+	}
+}
+
 func TestClient_ToolSchemaRequest(t *testing.T) {
 	const schemaJSON = `{"type":"OBJECT","description":"Task input","required":["tasks"],"properties":{
+		"p":{"anyOf":[{"type":"OBJECT","properties":{"v":{"type":"STRING","description":"any JSON value"}}},{"type":"NULL"}]},
+		"rows":{"anyOf":[{"type":"ARRAY","items":{"type":"OBJECT","properties":{"v":{"type":"STRING"}}}},{"type":"NULL"}]},
 		"tasks":{"type":"ARRAY","description":"Tasks to create","items":{
 			"type":"OBJECT","description":"A task","required":["idx","subject","details"],"properties":{
 				"idx":{"type":"INTEGER","description":"1-based task number","minimum":0,"maximum":100},
@@ -616,16 +676,28 @@ func TestClient_ToolSchemaRequest(t *testing.T) {
 			schema.Properties["tasks"].Items.Properties["matrix"].Type = ""
 			schema.Properties["tasks"].Items.Properties["matrix"].Items.Type = ""
 			schema.Properties["tasks"].Items.Properties["nullable"].AnyOf[1].Type = "null"
-			subject := schema.Properties["tasks"].Items.Properties["subject"]
-			subject.OneOf = []*shuttle.JSONSchema{{Type: "string"}}
-			subject.AllOf = []*shuttle.JSONSchema{{Type: "string"}}
-			subject.Not = &shuttle.JSONSchema{Type: "null"}
+			schema.Properties["p"].AnyOf[0].Properties["v"].Type = ""
+			schema.Properties["rows"].AnyOf[0].Items.Type = ""
+			schema.Properties["rows"].AnyOf[0].Items.Properties["v"].Type = ""
 			inputTools := []shuttle.Tool{
 				&mockShuttleTool{name: "create_tasks", schema: schema},
 				&mockShuttleTool{name: "no_arguments", schema: &shuttle.JSONSchema{}},
 				&mockShuttleTool{name: "description_only", schema: &shuttle.JSONSchema{Description: "No arguments"}},
 				&mockShuttleTool{name: "null_property", schema: &shuttle.JSONSchema{Properties: map[string]*shuttle.JSONSchema{"a": nil}}},
 				&mockShuttleTool{name: "root_alternative", schema: &shuttle.JSONSchema{AnyOf: []*shuttle.JSONSchema{{Type: "object"}}}},
+			}
+			for _, keyword := range []string{"oneOf", "allOf", "not"} {
+				unsupported := &shuttle.JSONSchema{}
+				branch := &shuttle.JSONSchema{Type: "object", Properties: map[string]*shuttle.JSONSchema{"x": {Type: "string"}}}
+				switch keyword {
+				case "oneOf":
+					unsupported.OneOf = []*shuttle.JSONSchema{branch}
+				case "allOf":
+					unsupported.AllOf = []*shuttle.JSONSchema{branch}
+				default:
+					unsupported.Not = branch
+				}
+				inputTools = append(inputTools, &mockShuttleTool{name: "nested_" + keyword, schema: &shuttle.JSONSchema{Type: "object", Properties: map[string]*shuttle.JSONSchema{"p": unsupported}}})
 			}
 			client := NewClient(Config{APIKey: "test-key", Model: "gemini-3-flash-preview"})
 			client.httpClient.Transport = &mockTransport{baseURL: server.URL, original: server.Client().Transport}
@@ -638,7 +710,7 @@ func TestClient_ToolSchemaRequest(t *testing.T) {
 				_, err = client.Chat(ctx, messages, inputTools)
 			}
 			require.NoError(t, err)
-			require.Len(t, span.Events, 2)
+			require.Len(t, span.Events, len(inputTools)-3)
 			request := <-captured
 			tools := request["tools"].([]interface{})
 			require.Len(t, tools, 1)
@@ -661,6 +733,9 @@ func TestClient_ToolSchemaRequest(t *testing.T) {
 			assert.Equal(t, map[string]interface{}{"type": "OBJECT", "description": "No arguments"}, declarations[2].(map[string]interface{})["parameters"])
 			assert.Empty(t, inputTools[1].InputSchema().Type)
 			assert.Empty(t, inputTools[2].InputSchema().Type)
+			assert.Empty(t, schema.Properties["p"].AnyOf[0].Properties["v"].Type)
+			assert.Empty(t, schema.Properties["rows"].AnyOf[0].Items.Type)
+			assert.Empty(t, schema.Properties["rows"].AnyOf[0].Items.Properties["v"].Type)
 			client.strictToolSchemas = true
 			for _, invalidTool := range inputTools[3:] {
 				if mode == "stream" {
