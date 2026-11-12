@@ -33,6 +33,21 @@ func IsAnthropicModel(modelID string) bool {
 	return strings.Contains(m, "anthropic") || strings.Contains(m, "claude")
 }
 
+// SupportsTemperature reports whether a Bedrock model accepts the temperature
+// inference parameter. OpenAI reasoning models do their own sampling and reject
+// the field outright rather than ignoring it:
+//
+//	ValidationException: This model doesn't support the temperature field.
+//	Remove temperature and try again.
+//
+// The parameter must therefore be omitted entirely for them — sending any
+// value, including a default, fails the request. Keep this as a deny-list so an
+// unrecognized model keeps the documented default behaviour of sending
+// temperature, and only families known to reject it are special-cased.
+func SupportsTemperature(modelID string) bool {
+	return !strings.Contains(strings.ToLower(modelID), "openai")
+}
+
 // NewClientForModel builds the appropriate Bedrock client for cfg.ModelID:
 // Anthropic Claude models use the Anthropic SDK client (NewSDKClient), which
 // streams tokens incrementally and sets cache_control for prompt caching; all
