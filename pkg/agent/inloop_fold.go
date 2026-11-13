@@ -115,6 +115,18 @@ func (sm *SegmentedMemory) NeedsFold() bool {
 	return len(excised) > 0
 }
 
+// CanFold reports whether a fold now would remove anything, whatever the
+// context's size: what Compact asks before it asks for a summary.
+func (sm *SegmentedMemory) CanFold() bool {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	if sm.reliefInFlight {
+		return false
+	}
+	_, excised := sm.foldSplitLocked()
+	return len(excised) > 0
+}
+
 // parseFoldReply extracts the summary from the model's fold reply. Lenient:
 // it takes the outermost JSON object in the text and reads its summary field,
 // so a model that wraps the JSON in prose still lands.
