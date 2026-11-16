@@ -137,6 +137,10 @@ type JSONSchema struct {
 	Maximum     *float64               `json:"maximum,omitempty"`
 	MinLength   *int                   `json:"minLength,omitempty"`
 	MaxLength   *int                   `json:"maxLength,omitempty"`
+	MinItems    *int                   `json:"minItems,omitempty"`
+	MaxItems    *int                   `json:"maxItems,omitempty"`
+	// AdditionalProperties is a boolean or a schema, kept as written.
+	AdditionalProperties interface{} `json:"additionalProperties,omitempty"`
 	// Composite schema keywords (JSON Schema §10.2.1)
 	// Required for MCP tools that use nullable types like anyOf: [{type: "string"}, {type: "null"}]
 	AnyOf []*JSONSchema `json:"anyOf,omitempty"`
@@ -200,6 +204,15 @@ func (s *JSONSchema) toMap(providerFacing bool) map[string]interface{} {
 	}
 	if s.MaxLength != nil {
 		result["maxLength"] = *s.MaxLength
+	}
+	if s.MinItems != nil {
+		result["minItems"] = *s.MinItems
+	}
+	if s.MaxItems != nil {
+		result["maxItems"] = *s.MaxItems
+	}
+	if s.AdditionalProperties != nil {
+		result["additionalProperties"] = s.AdditionalProperties
 	}
 	if len(s.AnyOf) > 0 {
 		result["anyOf"] = schemaAlternativesToMaps(s.AnyOf, providerFacing)

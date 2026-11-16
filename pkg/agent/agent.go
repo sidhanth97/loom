@@ -3410,6 +3410,17 @@ func (a *Agent) runConversationLoop(ctx Context) (resp *Response, err error) {
 		for _, c := range llmResp.ToolCalls {
 			batchIDCount[c.ID]++
 		}
+		var truncated map[string]bool
+		if llmResp.StopReason == "max_tokens" {
+			for _, c := range llmResp.ToolCalls {
+				if classifyToolCall(c, tools) == toolCallStateIncomplete {
+					if truncated == nil {
+						truncated = map[string]bool{}
+					}
+					truncated[c.ID] = true
+				}
+			}
+		}
 		st := &batchState{
 			span:               span,
 			turnCount:          turnCount,
@@ -3422,6 +3433,7 @@ func (a *Agent) runConversationLoop(ctx Context) (resp *Response, err error) {
 			turnDedup:          make(map[string]*shuttle.Result),
 			parkableTail:       a.hitlPark != nil && assistantPersisted && a.memory.HasStore(),
 			batchIDCount:       batchIDCount,
+			truncated:          truncated,
 		}
 
 		a.dispatchBatch(ctx, session, llmResp.ToolCalls, st)
@@ -3507,6 +3519,9 @@ type batchState struct {
 	// alone; prepareCall records it on that call's tool span. Empty adds no
 	// dispatch attributes.
 	barrierReason string
+
+	// truncated is the calls whose input the reply's output limit cut off.
+	truncated map[string]bool
 }
 
 // addHygieneMeta surfaces an end-of-turn hygiene outcome in a response's
@@ -3582,6 +3597,24 @@ func (a *Agent) prepareCall(ctx Context, session *Session, toolCall ToolCall, i 
 					Code:    "turn_limit_exceeded",
 					Message: fmt.Sprintf("per-turn tool call limit (%d) reached — call %d of %d skipped", st.maxPerTurn, i+1, st.batchLen),
 				},
+			},
+			AgentID:   a.GetID(),
+			Timestamp: time.Now(),
+		}, false)
+		*st.toolExecutionCount++
+		return nil, true
+	}
+
+	// A call the output limit cut off is not run on what arrived of it.
+	if st.truncated[toolCall.ID] {
+		const why = "not run: your reply reached its output limit (max_tokens) before this call's input was complete. Send the call again; if its input is long, shorten it or split the work across calls."
+		a.appendMessage(ctx, session, Message{
+			Role:      "tool",
+			Content:   "output_truncated — " + why,
+			ToolUseID: toolCall.ID,
+			ToolResult: &shuttle.Result{
+				Success: false,
+				Error:   &shuttle.Error{Code: "output_truncated", Message: why},
 			},
 			AgentID:   a.GetID(),
 			Timestamp: time.Now(),
