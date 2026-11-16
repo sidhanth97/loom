@@ -3305,7 +3305,8 @@ func (a *Agent) runConversationLoop(ctx Context) (resp *Response, err error) {
 			}
 
 			content := llmResp.Content
-			if strings.TrimSpace(content) == "" {
+			noReply := strings.TrimSpace(content) == ""
+			if noReply {
 				// Already retried and still empty — use fallback.
 				content = fmt.Sprintf("Completed %d tool executions across %d turns.", toolExecutionCount, turnCount)
 			}
@@ -3344,6 +3345,9 @@ func (a *Agent) runConversationLoop(ctx Context) (resp *Response, err error) {
 				"tool_executions": toolExecutionCount,
 				"stop_reason":     llmResp.StopReason,
 				"empty_retried":   emptyRetried,
+			}
+			if noReply {
+				meta[NoReplyKey] = true
 			}
 			addHygieneMeta(meta, hygieneLast)
 			return &Response{
@@ -3997,7 +4001,8 @@ func (a *Agent) synthesizeFinalResponse(ctx Context, session *Session, turnCount
 
 	// Return synthesized response — fall back to a brief summary if LLM returned empty
 	content := finalResp.Content
-	if strings.TrimSpace(content) == "" {
+	noReply := strings.TrimSpace(content) == ""
+	if noReply {
 		content = fmt.Sprintf("Completed %d tool executions across %d turns.", toolExecutionCount, turnCount)
 	}
 
@@ -4014,9 +4019,13 @@ func (a *Agent) synthesizeFinalResponse(ctx Context, session *Session, turnCount
 			"max_turns_hit":   turnCount >= a.config.MaxTurns,
 			"max_exec_hit":    toolExecutionCount >= a.config.MaxToolExecutions,
 			"synthesized":     true,
+			NoReplyKey:        noReply,
 		},
 	}, nil
 }
+
+// NoReplyKey marks a response whose content is the stand-in for a model that said nothing.
+const NoReplyKey = "no_reply"
 
 // advertisedToolsBytes measures the serialized bytes of the advertised tool
 // schemas as they ride the provider tools parameter (name + description +
