@@ -3550,6 +3550,11 @@ func addHygieneMeta(meta map[string]interface{}, o *hygiene.EnforcementOutcome) 
 // anything said afterwards would be said to nobody.
 const EndsTurnKey = "end_turn"
 
+// ToolImagesKey is where a tool's result metadata carries pictures for the
+// model, as []types.ImageContent: a tool result is text, so they follow the
+// batch's results as image blocks.
+const ToolImagesKey = "tool_images"
+
 // dispatchOneCall runs one call of a tool batch through the full per-call
 // ceremony — caps, dedup, progress emits, spans, execution with
 // self-correction, recovery, persistence, failure tracking, the tool row,
@@ -3904,6 +3909,18 @@ func (a *Agent) commitToolRow(ctx Context, session *Session, toolCall ToolCall, 
 		}
 	}
 
+	// Pictures the tool returned go to the model as image blocks after the
+	// batch's results; the row keeps none of their bytes.
+	var pictures []ContentBlock
+	if result != nil && result.Metadata != nil {
+		if imgs, ok := result.Metadata[ToolImagesKey].([]types.ImageContent); ok {
+			delete(result.Metadata, ToolImagesKey)
+			for i := range imgs {
+				pictures = append(pictures, ContentBlock{Type: "image", Image: &imgs[i]})
+			}
+		}
+	}
+
 	// Add tool result to conversation
 	a.appendMessage(ctx, session, Message{
 		Role:       "tool",
@@ -3928,6 +3945,16 @@ func (a *Agent) commitToolRow(ctx Context, session *Session, toolCall ToolCall, 
 				Timestamp: time.Now(),
 			})
 		}
+	}
+	if len(pictures) > 0 {
+		label := fmt.Sprintf("The picture(s) %s returned for call %s:", toolCall.Name, toolCall.ID)
+		st.pendingSidecars = append(st.pendingSidecars, Message{
+			Role:          roleSkillBody,
+			Content:       label,
+			ContentBlocks: append([]ContentBlock{{Type: "text", Text: label}}, pictures...),
+			AgentID:       a.GetID(),
+			Timestamp:     time.Now(),
+		})
 	}
 
 	// === AUTOMATIC GRAPH MEMORY EXTRACTION ===
