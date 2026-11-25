@@ -69,7 +69,8 @@ func (f *foldingStream) ChatStream(_ context.Context, msgs []Message, _ []shuttl
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	usage := llmtypes.Usage{InputTokens: 100, OutputTokens: 10, TotalTokens: 110, CostUSD: callCost}
-	isFold := strings.Contains(msgs[len(msgs)-1].Content, "Context maintenance: summarise the work so far")
+	last := msgs[len(msgs)-1].Content
+	isFold := strings.Contains(last, "Context maintenance: summarise the work so far") || strings.Contains(last, "You maintain the working memory")
 	f.sent = append(f.sent, append([]Message(nil), msgs...))
 	f.foldAt = append(f.foldAt, isFold)
 	if isFold {

@@ -60,6 +60,10 @@ func (a *Agent) Compact(ctx context.Context, sessionID, focus string) error {
 	if !ok || segMem == nil || !segMem.CanFold() {
 		return ErrNothingToCompact
 	}
+	if a.compaction != nil {
+		_, _, err := a.compactWith(ctx, sessionID, segMem, focus, true)
+		return err
+	}
 
 	ask := a.foldAsk(ctx)
 	if f := strings.TrimSpace(focus); f != "" {

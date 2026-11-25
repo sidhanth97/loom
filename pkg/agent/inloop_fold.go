@@ -127,6 +127,79 @@ func (sm *SegmentedMemory) CanFold() bool {
 	return len(excised) > 0
 }
 
+// ContextWindow is the window, in tokens, this memory was configured with.
+func (sm *SegmentedMemory) ContextWindow() int {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+	return sm.tokenBudget.MaxTokens
+}
+
+// NeedsCompaction reports whether the context — the summary with it — has
+// reached limit tokens and a fold would remove anything. The batch in flight
+// is left out, as for NeedsFold: no fold may remove it.
+func (sm *SegmentedMemory) NeedsCompaction(limit int) bool {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	if sm.reliefInFlight || limit <= 0 {
+		return false
+	}
+	if sm.estimateAgainstLocked(false, limit) < limit {
+		return false
+	}
+	_, excised := sm.foldSplitLocked()
+	return len(excised) > 0
+}
+
+// toolInputPreview bounds how much of a tool call's input the compaction
+// material shows: enough to say what the call was for.
+const toolInputPreview = 300
+
+// CompactionMaterial is what a compaction summarises, as text: the current
+// summary and the settled past a fold removes, with every tool output left
+// out — each call is named with its input, what it returned is not. It also
+// returns the context's size now. Empty when a fold would remove nothing.
+func (sm *SegmentedMemory) CompactionMaterial() (string, int) {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	if sm.reliefInFlight {
+		return "", 0
+	}
+	_, excised := sm.foldSplitLocked()
+	if len(excised) == 0 {
+		return "", 0
+	}
+	var b strings.Builder
+	if sm.summary.text != "" {
+		b.WriteString("<previous-summary>\n" + sm.summary.text + "\n</previous-summary>\n\n")
+	}
+	b.WriteString("<conversation>\n")
+	for i := range excised {
+		m := &excised[i]
+		switch m.Role {
+		case "user":
+			if text := strings.TrimSpace(m.Content); text != "" {
+				b.WriteString("[user]\n" + text + "\n\n")
+			}
+		case "assistant":
+			if text := strings.TrimSpace(m.Content); text != "" {
+				b.WriteString("[assistant]\n" + text + "\n\n")
+			}
+			for _, call := range m.ToolCalls {
+				input := ""
+				if raw, err := json.Marshal(call.Input); err == nil {
+					input = string(raw)
+				}
+				if r := []rune(input); len(r) > toolInputPreview {
+					input = string(r[:toolInputPreview]) + "…"
+				}
+				b.WriteString("[tool call] " + call.Name + " " + input + "\n\n")
+			}
+		}
+	}
+	b.WriteString("</conversation>")
+	return b.String(), int(float64(sm.accurateTokensLocked(sm.compileLocked())) * sm.calibrationLocked())
+}
+
 // parseFoldReply extracts the summary from the model's fold reply. Lenient:
 // it takes the outermost JSON object in the text and reads its summary field,
 // so a model that wraps the JSON in prose still lands.

@@ -118,6 +118,7 @@ type Agent struct {
 	orchestratorLLM LLMProvider // For merge/synthesis in fork-join orchestration
 	classifierLLM   LLMProvider // For intent classification / pattern selection
 	compressorLLM   LLMProvider // For memory compression / semantic search reranking
+	compaction      Compaction  // When set, how a session's context is compacted (compaction.go)
 
 	// Tracer for observability
 	tracer observability.Tracer

@@ -361,6 +361,13 @@ func (sm *SegmentedMemory) estimateLocked() int { return sm.estimateOptLocked(fa
 // Both tiers are scaled by the provider calibration factor, so the cheap
 // tier's early exit compares like with like. Must hold lock.
 func (sm *SegmentedMemory) estimateOptLocked(skipSummary bool) int {
+	return sm.estimateAgainstLocked(skipSummary, sm.startMarkLocked(0))
+}
+
+// estimateAgainstLocked is estimateOptLocked measured against mark: the cheap
+// tier is returned while it is under mark, and the count is tokenized past it.
+// Must hold lock.
+func (sm *SegmentedMemory) estimateAgainstLocked(skipSummary bool, mark int) int {
 	compiled := sm.compileLocked()
 	f := sm.calibrationLocked()
 	isSummary := func(i int) bool {
@@ -402,7 +409,7 @@ func (sm *SegmentedMemory) estimateOptLocked(skipSummary bool) int {
 		}
 	}
 	cheap := int(float64(bytes) / cheapBytesPerToken * f)
-	if limit := sm.startMarkLocked(0); limit <= 0 || cheap < limit {
+	if mark <= 0 || cheap < mark {
 		return cheap
 	}
 

@@ -2768,6 +2768,7 @@ func (a *Agent) runConversationLoop(ctx Context) (resp *Response, err error) {
 	emptyRetried := false                       // one-shot flag: retry empty LLM response at most once per conversation
 	foldPending := false                        // in-loop fold: this call carries the fold instruction; its reply is the summary
 	foldRetries := 0                            // unusable fold replies asked again once; then the step goes on unfolded
+	compactionFailures := 0                     // an embedder's compaction that failed twice is not tried again this turn
 	var foldUsage Usage                         // what fold calls cost; no row of their own, so the next row the loop writes carries it
 	hygieneRetries := 0                         // capped count of REQUIRE_FIX retries the end-of-turn auditor has triggered
 	var hygieneLast *hygiene.EnforcementOutcome // last outcome, surfaced into Response.Metadata
@@ -2916,12 +2917,33 @@ func (a *Agent) runConversationLoop(ctx Context) (resp *Response, err error) {
 				zap.Strings("advertised", advertised))
 		}
 
+		// An embedder's compaction replaces the in-loop fold: at its share of the
+		// session model's window, the past is summarised without its tool outputs
+		// by the model it picks, before this iteration's send.
+		if segMem, ok := session.SegmentedMem.(*SegmentedMemory); ok && segMem != nil && a.compaction != nil && compactionFailures < 2 && !scriptedTurn(ctx) && segMem.NeedsCompaction(a.compactionLimit(ctx, segMem)) {
+			applied, spent, cerr := a.compactWith(ctx, session.ID, segMem, "", false)
+			addUsage(&turnUsage, spent)
+			addUsage(&foldUsage, spent)
+			if applied {
+				compactionFailures = 0
+				span.AddEvent("compaction.applied", map[string]interface{}{"turn": turnCount})
+				messages = session.GetMessages()
+				tools = a.advertisedTools(session)
+				tools = recovery.activeTools(tools)
+				segMem.SetAdvertisedToolsBytes(advertisedToolsBytes(tools))
+			} else {
+				compactionFailures++
+				zap.L().Warn("compaction failed; the step goes on uncompacted",
+					zap.String("session_id", session.ID), zap.Int("failures", compactionFailures), zap.Error(cerr))
+			}
+		}
+
 		// The in-loop fold is the only shedding before a send: past G, the next
 		// call carries the fold instruction and its reply is consumed as the
 		// summary — the agent summarises itself on its own warm cache. Nothing
 		// else sheds here. A prompt the provider still refuses as too long is
 		// answered where the refusal happens: one relief pass and one resend.
-		if segMem, ok := session.SegmentedMem.(*SegmentedMemory); ok && segMem != nil && !foldPending && foldRetries < 2 && !scriptedTurn(ctx) && segMem.NeedsFold() {
+		if segMem, ok := session.SegmentedMem.(*SegmentedMemory); ok && segMem != nil && a.compaction == nil && !foldPending && foldRetries < 2 && !scriptedTurn(ctx) && segMem.NeedsFold() {
 			foldPending = true
 			zap.L().Info("inloopFold: armed",
 				zap.String("session_id", session.ID),
@@ -3717,6 +3739,9 @@ func (a *Agent) prepareCall(ctx Context, session *Session, toolCall ToolCall, i 
 // cache or the transcript — settleCall owns all of those. See runTool for the
 // shared state executor.Execute can still reach.
 func (a *Agent) runCall(ctx Context, pc *preparedCall, sessionID string) (*shuttle.Result, error) {
+	if pc.call.ID != "" {
+		ctx = &contextWithValue{Context: ctx, key: shuttle.ToolCallIDKey{}, val: pc.call.ID}
+	}
 	return a.runTool(ctx, pc.call.Name, pc.call.Input, sessionID)
 }
 
